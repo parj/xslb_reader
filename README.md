@@ -10,7 +10,8 @@ Supports
 
 ## TODO
 - Output in json, markdown, dict as options
+- Add in tests
 - Support for reading:
-    - values
-    - pivot tables
+    - values (Done)
+    - pivot tables (Done)
     - filters

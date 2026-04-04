@@ -1,8 +1,9 @@
 """
-xlsb_formula_reader.py
-======================
-Pure-Python reader that extracts cell formulas from Excel Binary Workbook
-(.xlsb) files.  No third-party dependencies — only the Python standard library.
+reader.py
+=========
+Pure-Python reader for Excel Binary Workbook (.xlsb) files.
+Supports extracting cell formulas, cached/constant cell values, and PivotTable metadata.
+No third-party dependencies — only the Python standard library.
 
 Implemented from:
   • [MS-XLSB] Excel (.xlsb) Binary File Format
@@ -22,11 +23,11 @@ Tokens 0x20–0x7F  : three class variants per token type:
 
 Usage
 -----
-    python xlsb_formula_reader.py workbook.xlsb [sheet_name]
+    python reader.py workbook.xlsb [sheet_name]
 
 Or programmatically:
 
-    from xlsb_formula_reader import XlsbWorkbook, col_to_letter
+    from reader import XlsbWorkbook, col_to_letter
     with XlsbWorkbook("workbook.xlsb") as wb:
         for sheet_name, formulas in wb.iter_formulas():
             for (row, col), formula in sorted(formulas.items()):
@@ -34,7 +35,9 @@ Or programmatically:
 """
 
 import io
+import json
 import os
+import pprint
 import re
 import struct
 import zipfile
@@ -144,6 +147,10 @@ BRT_END_SST       = 0x00A0
 BRT_BEGIN_SHEET   = 0x0081
 BRT_END_SHEET     = 0x0082
 BRT_BUNDLE_SH     = 0x009C
+BRT_BEGIN_SX_VIEW = 0x0118  # BrtBeginSXView
+BRT_BEGIN_SX_LOCATION = 0x013A  # BrtBeginSXLocation
+BRT_BEGIN_SXVD = 0x011D  # BrtBeginSXVD
+BRT_BEGIN_SXVI = 0x011A  # BrtBeginSXVI
 
 # ---------------------------------------------------------------------------
 # Ptg exact-byte token constants  (ptg < 0x20)
@@ -223,6 +230,25 @@ ERR_CODES = {
     0x17: "#REF!",  0x1D: "#NAME?",  0x24: "#NUM!",
     0x2A: "#N/A",   0x2B: "#GETTING_DATA",
 }
+
+
+def _rk_to_number(raw: int):
+    """Decode RkNumber (2.5.123)."""
+    fx100 = raw & 0x1
+    f_int = raw & 0x2
+    num30 = raw >> 2
+    if f_int:
+        # signed 30-bit integer
+        if num30 & (1 << 29):
+            value = num30 - (1 << 30)
+        else:
+            value = num30
+    else:
+        bits64 = num30 << 34
+        value = struct.unpack("<d", struct.pack("<Q", bits64))[0]
+    if fx100:
+        value = value / 100
+    return value
 
 # ---------------------------------------------------------------------------
 # Built-in function table  iftab → name
@@ -808,6 +834,17 @@ def _read_sst(data: bytes) -> List[str]:
     return strings
 
 
+def _read_xlwide_from(buf: io.BytesIO) -> str:
+    cch_raw = buf.read(4)
+    if len(cch_raw) < 4:
+        return ""
+    cch = struct.unpack("<I", cch_raw)[0]
+    raw = buf.read(cch * 2)
+    if len(raw) < cch * 2:
+        return ""
+    return raw.decode("utf-16-le", errors="replace")
+
+
 # ---------------------------------------------------------------------------
 # Workbook part  (xl/workbook.bin)
 # ---------------------------------------------------------------------------
@@ -864,6 +901,15 @@ def _read_rels(xml_data: bytes) -> Dict[str, str]:
             r'<Relationship[^>]+Id="([^"]+)"[^>]+Target="([^"]+)"', text
         )
     }
+
+
+def _resolve_rel_target(base_part: str, target: str) -> str:
+    """
+    Resolve an OPC relationship target relative to the source part path.
+    """
+    base_dir = os.path.dirname(base_part.lstrip("/"))
+    joined = os.path.normpath(os.path.join(base_dir, target))
+    return joined.replace("\\", "/")
 
 
 # ---------------------------------------------------------------------------
@@ -1026,13 +1072,132 @@ def _parse_worksheet(
     return formulas
 
 
+def _parse_worksheet_values(
+    data: bytes,
+    sst: List[str],
+) -> Dict[Tuple[int, int], object]:
+    """
+    Parse worksheet cached/constant cell values.
+    Returns {(row, col): value}. Row/col are 0-based.
+    """
+    values: Dict[Tuple[int, int], object] = {}
+    current_row = 0
+
+    for rec_type, payload in RecordReader(data):
+        if rec_type == BRT_ROW_HDR:
+            if len(payload) >= 4:
+                current_row = struct.unpack_from("<I", payload, 0)[0]
+            continue
+
+        # Cell records
+        if rec_type == BRT_CELL_ISST and len(payload) >= 12:
+            col = struct.unpack_from("<I", payload, 0)[0]
+            isst = struct.unpack_from("<I", payload, 8)[0]
+            values[(current_row, col)] = sst[isst] if 0 <= isst < len(sst) else ""
+
+        elif rec_type == BRT_CELL_ST and len(payload) >= 8:
+            col = struct.unpack_from("<I", payload, 0)[0]
+            buf = io.BytesIO(payload)
+            buf.read(8)  # Cell
+            values[(current_row, col)] = _read_xlwide_from(buf)
+
+        elif rec_type == BRT_CELL_REAL and len(payload) >= 16:
+            col = struct.unpack_from("<I", payload, 0)[0]
+            values[(current_row, col)] = struct.unpack_from("<d", payload, 8)[0]
+
+        elif rec_type == BRT_CELL_RK and len(payload) >= 12:
+            col = struct.unpack_from("<I", payload, 0)[0]
+            rk = struct.unpack_from("<I", payload, 8)[0]
+            values[(current_row, col)] = _rk_to_number(rk)
+
+        elif rec_type == BRT_CELL_BOOL and len(payload) >= 9:
+            col = struct.unpack_from("<I", payload, 0)[0]
+            values[(current_row, col)] = bool(payload[8])
+
+        elif rec_type == BRT_CELL_ERROR and len(payload) >= 9:
+            col = struct.unpack_from("<I", payload, 0)[0]
+            values[(current_row, col)] = ERR_CODES.get(payload[8], "#ERR")
+
+        # Formula records (use cached evaluation result)
+        elif rec_type in _FMLA_RECS and len(payload) >= 10:
+            col = struct.unpack_from("<I", payload, 0)[0]
+            buf = io.BytesIO(payload)
+            buf.read(8)  # Cell
+            if rec_type == BRT_FMLA_STRING:
+                values[(current_row, col)] = _read_xlwide_from(buf)
+            elif rec_type == BRT_FMLA_NUM:
+                raw = buf.read(8)
+                if len(raw) == 8:
+                    values[(current_row, col)] = struct.unpack("<d", raw)[0]
+            elif rec_type == BRT_FMLA_BOOL:
+                b = buf.read(1)
+                if b:
+                    values[(current_row, col)] = bool(b[0])
+            elif rec_type == BRT_FMLA_ERROR:
+                b = buf.read(1)
+                if b:
+                    values[(current_row, col)] = ERR_CODES.get(b[0], "#ERR")
+
+    return values
+
+
+def _parse_pivot_table_part(data: bytes) -> Dict[str, object]:
+    """
+    Parse key metadata from a PivotTable part.
+    """
+    meta: Dict[str, object] = {
+        "name": None,
+        "cache_id": None,
+        "data_caption": None,
+        "location": None,
+        "pivot_fields": 0,
+        "pivot_items": 0,
+    }
+    for rec_type, payload in RecordReader(data):
+        if rec_type == BRT_BEGIN_SX_VIEW and len(payload) >= 32:
+            # Fixed part from BrtBeginSXView example (3.8.26)
+            id_cache = struct.unpack_from("<I", payload, 28)[0]
+            meta["cache_id"] = id_cache
+            buf = io.BytesIO(payload)
+            buf.seek(32)
+            meta["name"] = _read_xlwide_from(buf)
+            # fDisplayData is required to be 1 in spec for this record.
+            data_caption = _read_xlwide_from(buf)
+            if data_caption:
+                meta["data_caption"] = data_caption
+
+        elif rec_type == BRT_BEGIN_SX_LOCATION and len(payload) >= 36:
+            rw_first, rw_last, col_first, col_last = struct.unpack_from("<IIII", payload, 0)
+            rw_first_head, rw_first_data, col_first_data, crw_page, ccol_page = (
+                struct.unpack_from("<IIIII", payload, 16)
+            )
+            meta["location"] = {
+                "rfx_geom": {
+                    "top_left": f"{col_to_letter(col_first)}{rw_first + 1}",
+                    "bottom_right": f"{col_to_letter(col_last)}{rw_last + 1}",
+                },
+                "rw_first_head": rw_first_head + 1,
+                "rw_first_data": rw_first_data + 1,
+                "col_first_data": col_to_letter(col_first_data),
+                "page_rows": crw_page,
+                "page_cols": ccol_page,
+            }
+
+        elif rec_type == BRT_BEGIN_SXVD:
+            meta["pivot_fields"] = int(meta["pivot_fields"]) + 1
+        elif rec_type == BRT_BEGIN_SXVI:
+            meta["pivot_items"] = int(meta["pivot_items"]) + 1
+
+    return meta
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
 class XlsbWorkbook:
     """
-    Open an .xlsb workbook and iterate its cell formulas.
+    Open an .xlsb workbook and iterate worksheet formulas/values and PivotTable metadata.
 
     Parameters
     ----------
@@ -1115,6 +1280,79 @@ class XlsbWorkbook:
                 ws_data, all_names, self._sst, self._dnames
             )
 
+    def iter_values(
+        self,
+    ) -> Iterator[Tuple[str, Dict[Tuple[int, int], object]]]:
+        """
+        Yield ``(sheet_name, values)`` for every sheet.
+        ``values`` maps ``(row, col)`` -> cached/constant value.
+        """
+        for sheet_name, rel_id in self._sheets:
+            zpath = self._paths.get(rel_id)
+            if not zpath:
+                yield sheet_name, {}
+                continue
+            try:
+                ws_data = self._read_part(zpath)
+            except FileNotFoundError:
+                yield sheet_name, {}
+                continue
+            yield sheet_name, _parse_worksheet_values(ws_data, self._sst)
+
+    def iter_pivot_tables(self) -> Iterator[Dict[str, object]]:
+        """
+        Yield parsed PivotTable metadata, linked to sheets where possible.
+        """
+        # Map sheet part path -> sheet name
+        sheet_by_path: Dict[str, str] = {}
+        for sheet_name, rel_id in self._sheets:
+            zpath = self._paths.get(rel_id)
+            if zpath:
+                sheet_by_path[zpath] = sheet_name
+
+        # Discover pivot table parts through worksheet relationships.
+        seen_parts: set[str] = set()
+        for sheet_path, sheet_name in sheet_by_path.items():
+            rel_path = (
+                f"{os.path.dirname(sheet_path)}/_rels/{os.path.basename(sheet_path)}.rels"
+            ).replace("\\", "/")
+            try:
+                rels = _read_rels(self._read_part(rel_path))
+            except FileNotFoundError:
+                continue
+            for _, target in rels.items():
+                resolved = _resolve_rel_target(sheet_path, target)
+                if "/pivotTables/" not in resolved:
+                    continue
+                if resolved in seen_parts:
+                    continue
+                seen_parts.add(resolved)
+                try:
+                    pdata = self._read_part(resolved)
+                except FileNotFoundError:
+                    continue
+                meta = _parse_pivot_table_part(pdata)
+                meta["sheet"] = sheet_name
+                meta["part"] = resolved
+
+                # Resolve linked pivot cache definition if present.
+                p_rel_path = (
+                    f"{os.path.dirname(resolved)}/_rels/{os.path.basename(resolved)}.rels"
+                ).replace("\\", "/")
+                try:
+                    p_rels = _read_rels(self._read_part(p_rel_path))
+                except FileNotFoundError:
+                    p_rels = {}
+                cache_def = None
+                for _, t in p_rels.items():
+                    rr = _resolve_rel_target(resolved, t)
+                    if "/pivotCache/pivotCacheDefinition" in rr:
+                        cache_def = rr
+                        break
+                if cache_def:
+                    meta["pivot_cache_definition"] = cache_def
+                yield meta
+
     def close(self):
         self._zf.close()
 
@@ -1126,30 +1364,155 @@ class XlsbWorkbook:
 # CLI
 # ---------------------------------------------------------------------------
 
+def _cellmap(formulas: Dict[Tuple[int, int], str]) -> Dict[str, str]:
+    """Convert {(row,col): formula} to {'A1': formula} with stable ordering."""
+    out: Dict[str, str] = {}
+    for (row, col), formula in sorted(formulas.items()):
+        out[f"{col_to_letter(col)}{row + 1}"] = formula
+    return out
+
+
+def _cellmap_any(cells: Dict[Tuple[int, int], object]) -> Dict[str, object]:
+    out: Dict[str, object] = {}
+    for (row, col), value in sorted(cells.items()):
+        out[f"{col_to_letter(col)}{row + 1}"] = value
+    return out
+
+
+def _collect_formulas(
+    wb: "XlsbWorkbook",
+    filter_sheet: Optional[str] = None,
+) -> Dict[str, Dict[str, str]]:
+    out: Dict[str, Dict[str, str]] = {}
+    for sheet_name, formulas in wb.iter_formulas():
+        if filter_sheet and sheet_name != filter_sheet:
+            continue
+        if formulas:
+            out[sheet_name] = _cellmap(formulas)
+    return out
+
+
+def _collect_values(
+    wb: "XlsbWorkbook",
+    filter_sheet: Optional[str] = None,
+) -> Dict[str, Dict[str, object]]:
+    out: Dict[str, Dict[str, object]] = {}
+    for sheet_name, values in wb.iter_values():
+        if filter_sheet and sheet_name != filter_sheet:
+            continue
+        if values:
+            out[sheet_name] = _cellmap_any(values)
+    return out
+
+
+def _collect_pivots(
+    wb: "XlsbWorkbook",
+    filter_sheet: Optional[str] = None,
+) -> List[Dict[str, object]]:
+    out: List[Dict[str, object]] = []
+    for pt in wb.iter_pivot_tables():
+        if filter_sheet and pt.get("sheet") != filter_sheet:
+            continue
+        out.append(pt)
+    return out
+
+
+def _as_markdown(
+    sheets: List[str],
+    formulas: Optional[Dict[str, Dict[str, str]]] = None,
+    values: Optional[Dict[str, Dict[str, object]]] = None,
+    pivots: Optional[List[Dict[str, object]]] = None,
+) -> str:
+    lines: List[str] = [f"Sheets: {', '.join(sheets)}", ""]
+    emitted = False
+    if formulas:
+        emitted = True
+        lines.append("## Formulas")
+        lines.append("")
+        for sheet, cell_formulas in formulas.items():
+            lines.append(f"### {sheet}")
+            for cell, formula in cell_formulas.items():
+                lines.append(f"- `{cell}`: `{formula}`")
+            lines.append("")
+    if values:
+        emitted = True
+        lines.append("## Values")
+        lines.append("")
+        for sheet, cell_values in values.items():
+            lines.append(f"### {sheet}")
+            for cell, value in cell_values.items():
+                lines.append(f"- `{cell}`: `{value}`")
+            lines.append("")
+    if pivots:
+        emitted = True
+        lines.append("## Pivot Tables")
+        lines.append("")
+        for pt in pivots:
+            lines.append(
+                f"- `{pt.get('name') or '<unnamed>'}` "
+                f"(sheet: `{pt.get('sheet')}`, cache_id: `{pt.get('cache_id')}`)"
+            )
+            if pt.get("location"):
+                loc = pt["location"]["rfx_geom"]
+                lines.append(
+                    f"  body: `{loc['top_left']}:{loc['bottom_right']}`; "
+                    f"fields: `{pt.get('pivot_fields')}`; "
+                    f"items: `{pt.get('pivot_items')}`"
+                )
+    if not emitted:
+        lines.append("(no formulas found)")
+        return "\n".join(lines)
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def main():
-    import sys
-    if len(sys.argv) < 2:
-        print("Usage: python xlsb_formula_reader.py <file.xlsb> [sheet_name]")
-        sys.exit(1)
+    import argparse
+    parser = argparse.ArgumentParser(
+        description="Extract formulas, values, and pivot metadata from an .xlsb workbook."
+    )
+    parser.add_argument("path", help="Path to .xlsb file")
+    parser.add_argument("sheet_name", nargs="?", default=None,
+                        help="Optional sheet name filter")
+    parser.add_argument(
+        "--format",
+        dest="output_format",
+        choices=("dict", "json", "markdown"),
+        default="dict",
+        help="Output format (default: dict)",
+    )
+    parser.add_argument(
+        "--include",
+        default="formulas",
+        help="Comma-separated sections: formulas,values,pivots (default: formulas)",
+    )
+    args = parser.parse_args()
 
-    path = sys.argv[1]
-    filter_sheet = sys.argv[2] if len(sys.argv) > 2 else None
-
-    with XlsbWorkbook(path) as wb:
-        print(f"Sheets: {', '.join(wb.sheet_names)}\n")
-        found = False
-        for sheet_name, formulas in wb.iter_formulas():
-            if filter_sheet and sheet_name != filter_sheet:
-                continue
-            if not formulas:
-                continue
-            found = True
-            print(f"=== {sheet_name} ===")
-            for (row, col), formula in sorted(formulas.items()):
-                print(f"  {col_to_letter(col)}{row + 1}: {formula}")
-            print()
-        if not found:
-            print("(no formulas found)")
+    with XlsbWorkbook(args.path) as wb:
+        includes = {s.strip().lower() for s in args.include.split(",") if s.strip()}
+        formulas = _collect_formulas(wb, filter_sheet=args.sheet_name) if "formulas" in includes else {}
+        values = _collect_values(wb, filter_sheet=args.sheet_name) if "values" in includes else {}
+        pivots = _collect_pivots(wb, filter_sheet=args.sheet_name) if "pivots" in includes else []
+        data: Dict[str, object] = {}
+        if "formulas" in includes:
+            data["formulas"] = formulas
+        if "values" in includes:
+            data["values"] = values
+        if "pivots" in includes:
+            data["pivot_tables"] = pivots
+        if args.output_format == "json":
+            print(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True))
+        elif args.output_format == "markdown":
+            print(
+                _as_markdown(
+                    wb.sheet_names,
+                    formulas=formulas if "formulas" in includes else None,
+                    values=values if "values" in includes else None,
+                    pivots=pivots if "pivots" in includes else None,
+                ),
+                end="",
+            )
+        else:
+            print(pprint.pformat(data, sort_dicts=True))
 
 
 if __name__ == "__main__":
