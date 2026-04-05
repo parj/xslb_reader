@@ -1,6 +1,10 @@
+.DS_Store
 __pycache__
 *.pdf
 # Lite parser
 *.traineddata
 # Converted md from https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-xlsb/acc8aa92-1f02-4167-99f5-84f9f676b95a
+# Created by running lite parse [MS-XLSB].pdf
 xslb-file-format.md
+.pytest_cache/
+.ruff_cache/

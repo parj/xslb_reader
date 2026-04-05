@@ -1452,13 +1452,18 @@ def _as_markdown(
                 f"- `{pt.get('name') or '<unnamed>'}` "
                 f"(sheet: `{pt.get('sheet')}`, cache_id: `{pt.get('cache_id')}`)"
             )
-            if pt.get("location"):
-                loc = pt["location"]["rfx_geom"]
-                lines.append(
-                    f"  body: `{loc['top_left']}:{loc['bottom_right']}`; "
-                    f"fields: `{pt.get('pivot_fields')}`; "
-                    f"items: `{pt.get('pivot_items')}`"
-                )
+            location = pt.get("location")
+            if isinstance(location, dict):
+                rfx = location.get("rfx_geom")
+                if isinstance(rfx, dict):
+                    top_left = rfx.get("top_left")
+                    bottom_right = rfx.get("bottom_right")
+                    if top_left and bottom_right:
+                        lines.append(
+                            f"  body: `{top_left}:{bottom_right}`; "
+                            f"fields: `{pt.get('pivot_fields')}`; "
+                            f"items: `{pt.get('pivot_items')}`"
+                        )
     if not emitted:
         lines.append("(no formulas found)")
         return "\n".join(lines)
