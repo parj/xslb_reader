@@ -114,12 +114,14 @@ def _as_markdown(
 
 def main():
     import argparse
+
     parser = argparse.ArgumentParser(
         description="Extract formulas, values, and pivot metadata from an .xlsb workbook."
     )
     parser.add_argument("path", help="Path to .xlsb file")
-    parser.add_argument("sheet_name", nargs="?", default=None,
-                        help="Optional sheet name filter")
+    parser.add_argument(
+        "sheet_name", nargs="?", default=None, help="Optional sheet name filter"
+    )
     parser.add_argument(
         "--format",
         dest="output_format",
@@ -136,9 +138,21 @@ def main():
 
     with XlsbWorkbook(args.path) as wb:
         includes = {s.strip().lower() for s in args.include.split(",") if s.strip()}
-        formulas = _collect_formulas(wb, filter_sheet=args.sheet_name) if "formulas" in includes else {}
-        values = _collect_values(wb, filter_sheet=args.sheet_name) if "values" in includes else {}
-        pivots = _collect_pivots(wb, filter_sheet=args.sheet_name) if "pivots" in includes else []
+        formulas = (
+            _collect_formulas(wb, filter_sheet=args.sheet_name)
+            if "formulas" in includes
+            else {}
+        )
+        values = (
+            _collect_values(wb, filter_sheet=args.sheet_name)
+            if "values" in includes
+            else {}
+        )
+        pivots = (
+            _collect_pivots(wb, filter_sheet=args.sheet_name)
+            if "pivots" in includes
+            else []
+        )
         data: Dict[str, object] = {}
         if "formulas" in includes:
             data["formulas"] = formulas
