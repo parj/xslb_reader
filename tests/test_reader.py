@@ -26,7 +26,9 @@ def test_formula_extraction(workbook):
     assert function_lab[(18, 2)] == "=@ACOT(1)"  # C19
     assert function_lab[(19, 2)] == "=@ACOTH(2)"  # C20
     assert function_lab[(20, 2)] == "=ADDRESS(3,1)"  # C21
-    assert function_lab[(31, 2)] == '=AVERAGEIFS(Ledger!J186:J241,Ledger!J186:J241,">100")'  # C32
+    assert (
+        function_lab[(31, 2)] == '=AVERAGEIFS(Ledger!J186:J241,Ledger!J186:J241,">100")'
+    )  # C32
 
     assert ledger[(1, 10)] == "=MAX(J2,0)"  # K2
     assert ledger[(1, 11)] == "=ABS(MIN(J2,0))"  # L2
