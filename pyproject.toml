@@ -1,6 +1,6 @@
 [project]
 name = "xlsb_reader"
-version = "0.1.0rc3"
+version = "0.1.0rc4"
 description = "Pure-Python reader for Excel Binary Workbook (.xlsb) files"
 readme = "README.md"
 requires-python = ">=3.11"
