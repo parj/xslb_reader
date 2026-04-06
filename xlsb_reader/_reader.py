@@ -154,6 +154,23 @@ BRT_BEGIN_SX_VIEW = 0x0118  # BrtBeginSXView
 BRT_BEGIN_SX_LOCATION = 0x013A  # BrtBeginSXLocation
 BRT_BEGIN_SXVD = 0x011D  # BrtBeginSXVD
 BRT_BEGIN_SXVI = 0x011A  # BrtBeginSXVI
+# AutoFilter records
+BRT_BEGIN_AFILTER = 0x00A1  # 161
+BRT_END_AFILTER = 0x00A2  # 162
+BRT_BEGIN_FILTER_COLUMN = 0x00A3  # 163
+BRT_END_FILTER_COLUMN = 0x00A4  # 164
+BRT_BEGIN_FILTERS = 0x00A5  # 165
+BRT_END_FILTERS = 0x00A6  # 166
+BRT_FILTER = 0x00A7  # 167
+BRT_BEGIN_CUSTOM_FILTERS = 0x00AC  # 172
+BRT_END_CUSTOM_FILTERS = 0x00AD  # 173
+BRT_CUSTOM_FILTER = 0x00AE  # 174
+# PivotTable filter records
+BRT_BEGIN_SX_FILTERS = 0x0257  # 599
+BRT_END_SX_FILTERS = 0x0258  # 600
+BRT_BEGIN_SX_FILTER = 0x0259  # 601
+BRT_END_SX_FILTER = 0x025A  # 602
+BRT_SX_FILTER15 = 0x081F  # 2079
 
 # ---------------------------------------------------------------------------
 # Ptg exact-byte token constants  (ptg < 0x20)
@@ -237,6 +254,16 @@ ERR_CODES = {
     0x24: "#NUM!",
     0x2A: "#N/A",
     0x2B: "#GETTING_DATA",
+}
+
+# BrtCustomFilter grbitSgn → operator string
+_FILTER_OPS = {
+    0x01: "<",
+    0x02: "=",
+    0x03: "<=",
+    0x04: ">",
+    0x05: "<>",
+    0x06: ">=",
 }
 
 
@@ -1510,6 +1537,134 @@ def _parse_worksheet_values(
     return values
 
 
+def _parse_custom_filter(payload: bytes) -> Optional[Dict[str, object]]:
+    """
+    Parse a BrtCustomFilter record payload.
+    Returns {"operator": str, "value": float|bool|str} or None if malformed.
+    """
+    if len(payload) < 10:
+        return None
+    vts = payload[0]
+    grbitSgn = payload[1]
+    operator = _FILTER_OPS.get(grbitSgn, str(grbitSgn))
+    union = payload[2:10]
+    if vts == 0x04:  # Real
+        value: object = struct.unpack("<d", union)[0]
+    elif vts == 0x08:  # Boolean
+        value = bool(union[0])
+    elif vts == 0x06:  # String — XLWideString follows the 10-byte header
+        buf = io.BytesIO(payload[10:])
+        value = _read_xlwide_from(buf)
+    elif vts == 0x0C:  # Blanks
+        value = None
+    elif vts == 0x0E:  # Non-blanks
+        value = None
+    else:
+        return None
+    return {"operator": operator, "value": value}
+
+
+def _parse_worksheet_filters(data: bytes) -> Optional[Dict[str, object]]:
+    """
+    Parse AutoFilter records from a worksheet bin part.
+    Returns a filter info dict, or None if no AutoFilter is present.
+
+    The dict has the form::
+
+        {
+            "range": {"top_left": "A1", "bottom_right": "M241"},
+            "columns": [
+                {
+                    "column_index": 12,
+                    "filters": ["value1", ...],          # BrtFilter values
+                    "custom_filters": {                   # if present
+                        "logic": "and",                  # "and"|"or"
+                        "criteria": [{"operator": ">", "value": 1.0}],
+                    },
+                },
+            ],
+        }
+    """
+    result: Optional[Dict[str, object]] = None
+    current_col: Optional[Dict[str, object]] = None
+    custom_logic: Optional[str] = None
+    in_pivot_afilter = False  # skip autofilter blocks that belong to SX filters
+
+    # Simple state flags to detect whether we are inside an SX filter subtree
+    sx_depth = 0
+
+    for rec_type, payload in RecordReader(data):
+        if rec_type == BRT_BEGIN_SX_FILTER:
+            sx_depth += 1
+
+        elif rec_type == BRT_END_SX_FILTER:
+            if sx_depth > 0:
+                sx_depth -= 1
+
+        elif rec_type == BRT_BEGIN_AFILTER:
+            if sx_depth > 0:
+                # This autofilter lives inside an SX filter — skip it
+                in_pivot_afilter = True
+                continue
+            if len(payload) < 16:
+                continue
+            rw_first, rw_last, col_first, col_last = struct.unpack_from(
+                "<IIII", payload, 0
+            )
+            result = {
+                "range": {
+                    "top_left": f"{col_to_letter(col_first)}{rw_first + 1}",
+                    "bottom_right": f"{col_to_letter(col_last)}{rw_last + 1}",
+                },
+                "columns": [],
+            }
+
+        elif rec_type == BRT_END_AFILTER:
+            in_pivot_afilter = False
+
+        elif rec_type == BRT_BEGIN_FILTER_COLUMN and not in_pivot_afilter:
+            if result is None or len(payload) < 4:
+                continue
+            dwCol = struct.unpack_from("<I", payload, 0)[0]
+            current_col = {"column_index": dwCol, "filters": []}
+            custom_logic = None
+
+        elif rec_type == BRT_END_FILTER_COLUMN and not in_pivot_afilter:
+            if result is not None and current_col is not None:
+                result["columns"].append(current_col)  # type: ignore[attr-defined]
+            current_col = None
+
+        elif rec_type == BRT_BEGIN_CUSTOM_FILTERS and not in_pivot_afilter:
+            if current_col is None or len(payload) < 4:
+                continue
+            fAnd = struct.unpack_from("<I", payload, 0)[0]
+            custom_logic = "or" if fAnd else "and"
+            current_col["custom_filters"] = {"logic": custom_logic, "criteria": []}
+
+        elif rec_type == BRT_CUSTOM_FILTER and not in_pivot_afilter:
+            if current_col is None:
+                continue
+            crit = _parse_custom_filter(payload)
+            if crit is not None:
+                cf = current_col.get("custom_filters")
+                if cf is None:
+                    current_col["custom_filters"] = {
+                        "logic": "and",
+                        "criteria": [crit],
+                    }
+                else:
+                    cf["criteria"].append(crit)  # type: ignore[index]
+
+        elif rec_type == BRT_FILTER and not in_pivot_afilter:
+            if current_col is None:
+                continue
+            buf = io.BytesIO(payload)
+            val = _read_xlwide_from(buf)
+            current_col["filters"].append(val)  # type: ignore[attr-defined]
+
+    return result
+
+
 def _parse_pivot_table_part(data: bytes) -> Dict[str, object]:
     """
     Parse key metadata from a PivotTable part.
@@ -1521,7 +1676,10 @@ def _parse_pivot_table_part(data: bytes) -> Dict[str, object]:
         "location": None,
         "pivot_fields": 0,
         "pivot_items": 0,
+        "sx_filters": [],
     }
+    current_sx_filter: Optional[Dict[str, object]] = None
+
     for rec_type, payload in RecordReader(data):
         if rec_type == BRT_BEGIN_SX_VIEW and len(payload) >= 32:
             # Fixed part from BrtBeginSXView example (3.8.26)
@@ -1558,6 +1716,25 @@ def _parse_pivot_table_part(data: bytes) -> Dict[str, object]:
             meta["pivot_fields"] = int(meta["pivot_fields"]) + 1
         elif rec_type == BRT_BEGIN_SXVI:
             meta["pivot_items"] = int(meta["pivot_items"]) + 1
+
+        elif rec_type == BRT_BEGIN_SX_FILTER and len(payload) >= 12:
+            # BrtBeginSXFILTER: iField(i32) iMeasureFld(i32) sxft(i32) ...
+            iField, iMeasureFld, sxft = struct.unpack_from("<iii", payload, 0)
+            current_sx_filter = {
+                "field_index": iField,
+                "filter_type": sxft,
+                "criteria": [],
+            }
+
+        elif rec_type == BRT_CUSTOM_FILTER and current_sx_filter is not None:
+            crit = _parse_custom_filter(payload)
+            if crit is not None:
+                current_sx_filter["criteria"].append(crit)
+
+        elif rec_type == BRT_END_SX_FILTER:
+            if current_sx_filter is not None:
+                meta["sx_filters"].append(current_sx_filter)  # type: ignore[attr-defined]
+                current_sx_filter = None
 
     return meta
 
@@ -1672,6 +1849,43 @@ class XlsbWorkbook:
                 yield sheet_name, {}
                 continue
             yield sheet_name, _parse_worksheet_values(ws_data, self._sst)
+
+    def iter_filters(
+        self,
+    ) -> Iterator[Tuple[str, Optional[Dict[str, object]]]]:
+        """
+        Yield ``(sheet_name, filter_info)`` for every sheet.
+
+        ``filter_info`` is ``None`` when the sheet has no AutoFilter, otherwise
+        a dict describing the filter range and per-column criteria::
+
+            {
+                "range": {"top_left": "A1", "bottom_right": "M241"},
+                "columns": [
+                    {
+                        "column_index": 12,       # 0-based index within range
+                        "filters": [],            # simple string-match values
+                        "custom_filters": {       # present when custom criteria used
+                            "logic": "and",       # "and" | "or"
+                            "criteria": [
+                                {"operator": ">", "value": 1.0},
+                            ],
+                        },
+                    },
+                ],
+            }
+        """
+        for sheet_name, rel_id in self._sheets:
+            zpath = self._paths.get(rel_id)
+            if not zpath:
+                yield sheet_name, None
+                continue
+            try:
+                ws_data = self._read_part(zpath)
+            except FileNotFoundError:
+                yield sheet_name, None
+                continue
+            yield sheet_name, _parse_worksheet_filters(ws_data)
 
     def iter_pivot_tables(self) -> Iterator[Dict[str, object]]:
         """

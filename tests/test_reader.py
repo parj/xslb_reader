@@ -45,7 +45,47 @@ def test_value_extraction(workbook):
     assert pivot_sheet[(13, 0)] == "Row Labels"  # A14
     assert pivot_sheet[(22, 4)] == 240.0  # E23
     assert pivot_sheet[(27, 1)] == pytest.approx(59719.2104, rel=1e-9)  # B28
-    assert pivot_sheet[(48, 1)] == 240.0  # B49
+    assert pivot_sheet[(44, 1)] == 169.0  # B45 (PivotTable3 filtered to TxnID > 20)
+
+
+def test_filter_extraction(workbook):
+    # --- Worksheet AutoFilter (Ledger sheet) ---
+    filters_by_sheet = {
+        sheet: f for sheet, f in workbook.iter_filters() if f is not None
+    }
+
+    assert "Ledger" in filters_by_sheet
+    ledger_filter = filters_by_sheet["Ledger"]
+
+    assert ledger_filter["range"]["top_left"] == "A1"
+    assert ledger_filter["range"]["bottom_right"] == "M241"
+
+    cols = ledger_filter["columns"]
+    assert len(cols) == 1
+    col = cols[0]
+    assert col["column_index"] == 12  # M column (0-based within range)
+
+    cf = col["custom_filters"]
+    assert cf["logic"] == "and"
+    assert len(cf["criteria"]) == 1
+    assert cf["criteria"][0] == {"operator": ">", "value": 1.0}
+
+    # --- PivotTable SX filter (PivotTable3) ---
+    pivots = list(workbook.iter_pivot_tables())
+    by_name = {p["name"]: p for p in pivots}
+
+    p3 = by_name["PivotTable3"]
+    sx = p3["sx_filters"]
+    assert len(sx) == 1
+
+    pivot_filter = sx[0]
+    assert pivot_filter["field_index"] == 2
+    assert pivot_filter["filter_type"] == 20  # valueGreaterThan
+    assert len(pivot_filter["criteria"]) == 1
+    assert pivot_filter["criteria"][0] == {"operator": ">", "value": 20.0}
+
+    # Sheets without filters return None
+    assert filters_by_sheet.get("Function_Inventory") is None
 
 
 def test_pivot_extraction(workbook):
@@ -69,4 +109,4 @@ def test_pivot_extraction(workbook):
 
     p3 = by_name["PivotTable3"]
     assert p3["location"]["rfx_geom"]["top_left"] == "A37"
-    assert p3["location"]["rfx_geom"]["bottom_right"] == "B49"
+    assert p3["location"]["rfx_geom"]["bottom_right"] == "B45"  # filtered: fewer rows
