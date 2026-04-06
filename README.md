@@ -1,4 +1,4 @@
-# xlsb-reader
+# xlsb_reader
 
 I couldn't find a dependency that could read formulas xlsb files and built one.
 
