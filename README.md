@@ -7,11 +7,9 @@ I couldn't find a dependency that could read formulas xlsb files and built one.
 
 Supports
 - Formulas
+- Values
+- Pivot tables
 
 ## TODO
-- Output in json, markdown, dict as options
-- Add in tests
 - Support for reading:
-    - values (Done)
-    - pivot tables (Done)
     - filters

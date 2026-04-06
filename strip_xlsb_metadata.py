@@ -21,11 +21,11 @@ import xml.etree.ElementTree as ET
 CP_NS = "http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
 AP_NS = "http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
 
-ET.register_namespace("cp",      CP_NS)
-ET.register_namespace("dc",      "http://purl.org/dc/elements/1.1/")
+ET.register_namespace("cp", CP_NS)
+ET.register_namespace("dc", "http://purl.org/dc/elements/1.1/")
 ET.register_namespace("dcterms", "http://purl.org/dc/terms/")
-ET.register_namespace("xsi",     "http://www.w3.org/2001/XMLSchema-instance")
-ET.register_namespace("",        AP_NS)
+ET.register_namespace("xsi", "http://www.w3.org/2001/XMLSchema-instance")
+ET.register_namespace("", AP_NS)
 
 
 def _blank_tags(tree: ET.Element, ns: str, tag_names: list[str]) -> bool:
@@ -41,14 +41,17 @@ def _blank_tags(tree: ET.Element, ns: str, tag_names: list[str]) -> bool:
 
 def _serialise(tree: ET.Element) -> bytes:
     xml_body = ET.tostring(tree, encoding="unicode", xml_declaration=False)
-    return b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n' + xml_body.encode()
+    return (
+        b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n'
+        + xml_body.encode()
+    )
 
 
 def strip_metadata(path: str) -> bool:
     """Return True if the file was modified."""
     try:
         with zipfile.ZipFile(path, "r") as zf:
-            names     = zf.namelist()
+            names = zf.namelist()
             all_items = [(n, zf.read(n), zf.getinfo(n)) for n in names]
     except Exception as e:
         print(f"  [warn] could not read {path}: {e}", file=sys.stderr)
