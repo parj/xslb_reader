@@ -409,7 +409,8 @@ def _parse_dir(data: bytes) -> List[dict]:
                 modules.append(cur)
                 cur = None
             pos += rec_size   # rec_size == 0
-            pos += 4          # Reserved (4 bytes) after terminator
+            # Note: the OVBA spec defines 4 Reserved bytes here, but Excel
+            # does not write them in practice — do not skip them.
 
         else:
             # Unknown record — skip payload using Size field

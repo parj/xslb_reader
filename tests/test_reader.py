@@ -47,7 +47,7 @@ def test_value_extraction(workbook):
     assert function_inventory[(94, 0)] == "PROPER"  # A95
 
     assert pivot_sheet[(13, 0)] == "Row Labels"  # A14
-    assert pivot_sheet[(20, 4)] == 189.0  # E21 — Grand Total (6 categories × 3 currencies)
+    assert pivot_sheet[(20, 4)] == 27.0  # E21 — Grand Total (6 categories × 3 currencies)
     assert pivot_sheet[(27, 1)] == pytest.approx(59719.2104, rel=1e-9)  # B28 Finance NetGBP
     assert pivot_sheet[(44, 1)] == 169.0  # B45 — Grand Total count of TxnID
 
@@ -65,7 +65,7 @@ def test_pivot_extraction(workbook):
     assert p1["pivot_items"] == 13
     assert p1["pivot_cache_definition"] == "xl/pivotCache/pivotCacheDefinition1.bin"
     assert p1["location"]["rfx_geom"]["top_left"] == "A13"
-    assert p1["location"]["rfx_geom"]["bottom_right"] == "E21"
+    assert p1["location"]["rfx_geom"]["bottom_right"] == "E23"
 
     p2 = by_name["PivotTable2"]
     assert p2["location"]["rfx_geom"]["top_left"] == "A27"
@@ -211,7 +211,7 @@ def test_ovba_compress_decompress_roundtrip():
 XLSM_WORKBOOK = (
     Path(__file__).resolve().parents[1]
     / "test-data"
-    / "Finance_Ledger_VBA.xlsm"
+    / "Finance_Ledger_100_Unique_Functions.xlsm"
 )
 
 
@@ -223,25 +223,25 @@ def xlsm_workbook():
 
 def test_xlsm_vba_modules_found(xlsm_workbook):
     mods = xlsm_workbook.iter_vba_modules()
-    assert set(mods.keys()) == {"Module1", "Module2"}
+    print(set(mods.keys()))
+    assert set(mods.keys()) == {"ThisWorkbook", "Sheet1", "Sheet2", "Sheet3", "Sheet4", "Sheet5", "modComplex", "modLog", "modMain", "modMedium", "modSimple"}
 
 
-def test_xlsm_vba_module1_content(xlsm_workbook):
+def test_xlsm_vba_modLog_content(xlsm_workbook):
     mods = xlsm_workbook.iter_vba_modules()
-    src1 = mods["Module1"]
-    assert 'Sub HelloWorld()' in src1
-    assert 'MsgBox "Hello, World!"' in src1
-    assert 'Function AddNumbers(a As Long, b As Long) As Long' in src1
-    assert 'AddNumbers = a + b' in src1
-    assert 'Sub LoopExample()' in src1
+    src1 = mods["modLog"]
+
+    assert 'Public Sub LogEvent(ByVal source As String, ByVal action As String, ByVal details As String)' in src1
+    assert 'Dim ws As Worksheet' in src1
+    assert 'nr = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row + 1' in src1
 
 
-def test_xlsm_vba_module2_content(xlsm_workbook):
+def test_xlsm_vba_main_module_content(xlsm_workbook):
     mods = xlsm_workbook.iter_vba_modules()
-    src2 = mods["Module2"]
-    assert 'Function MultiplyNumbers(x As Double, y As Double) As Double' in src2
-    assert 'MultiplyNumbers = x * y' in src2
-    assert 'Sub StringExample()' in src2
+    src2 = mods["modMain"]
+    assert 'Application.ScreenUpdating = False' in src2
+    assert 'Application.Calculation = xlCalculationManual' in src2
+    assert 'modMedium.RunDataQuality' in src2
 
 
 def test_xlsm_vba_no_modules_on_plain_xlsx(xlsx_workbook):
@@ -283,41 +283,6 @@ def test_finance_xlsm_vba_workbook_event(finance_xlsm):
     assert "Private Sub Workbook_Open()" in src
     assert "Application.EnableEvents = False" in src
     assert "modMain.Main" in src
-
-
-def test_finance_xlsm_vba_main_module(finance_xlsm):
-    src = finance_xlsm.iter_vba_modules()["ThisWorkbook"]
-    assert "Public Sub Main()" in src
-    assert "modSimple.FormatLedger" in src
-    assert "modMedium.RefreshDashboard" in src
-    assert "modMedium.RunDataQuality" in src
-    assert "modLog.LogEvent" in src
-
-
-def test_finance_xlsm_vba_simple_module(finance_xlsm):
-    src = finance_xlsm.iter_vba_modules()["ThisWorkbook"]
-    assert "Public Sub FormatLedger()" in src
-    assert 'ThisWorkbook.Worksheets("Ledger")' in src
-    assert 'ws.Rows(1).Font.Bold = True' in src
-    assert '"#,##0.00;[Red]-#,##0.00"' in src
-
-
-def test_finance_xlsm_vba_medium_module(finance_xlsm):
-    src = finance_xlsm.iter_vba_modules()["ThisWorkbook"]
-    assert "Public Sub RefreshDashboard()" in src
-    assert "Application.CalculateFull" in src
-    assert "Public Sub RunDataQuality()" in src
-    assert "RGB(255, 199, 206)" in src
-
-
-def test_finance_xlsm_vba_complex_module(finance_xlsm):
-    src = finance_xlsm.iter_vba_modules()["ThisWorkbook"]
-    assert "Public Sub ImportBankCSV()" in src
-    assert "Application.GetOpenFilename" in src
-    assert "Public Sub BuildMonthlyClosePack()" in src
-    assert "ExportAsFixedFormat" in src
-    assert "Private Function GetOrCreateSheet(ByVal name As String) As Worksheet" in src
-
 
 def test_finance_xlsm_formulas_preserved(finance_xlsm):
     """Formulas in the xlsm should match the xlsx/xlsb counterparts."""

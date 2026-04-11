@@ -12,10 +12,7 @@ Supports reading:
 - Formulas
 - Values
 - Pivot tables
-
-## TODO
-- Support for reading:
-    - filters
+- Filters (worksheet AutoFilter and PivotTable value filters)
 
 ---
 
@@ -32,7 +29,7 @@ pip install xlsb_reader
 The `xlsb_reader` command extracts formulas, values, and pivot table metadata from an `.xlsb` file.
 
 ```
-xlsb_reader <path> [sheet_name] [--format dict|json|markdown] [--include formulas,values,pivots]
+xlsb_reader <path> [sheet_name] [--format dict|json|markdown] [--include formulas,values,pivots,filters]
 ```
 
 ### Output all data (default dict format)
@@ -163,6 +160,15 @@ with XlsbWorkbook("workbook.xlsb") as wb:
     },
     "part": "xl/pivotTables/pivotTable1.bin",                        # str — internal zip path
     "pivot_cache_definition": "xl/pivotCache/pivotCacheDefinition1.bin",  # str | None
+    "sx_filters": [                     # list — PivotTable value filters (empty if none)
+        {
+            "field_index": 2,           # int — 0-based index of the filtered pivot field
+            "filter_type": 20,          # int — PivotFilterType (e.g. 20 = valueGreaterThan)
+            "criteria": [
+                {"operator": ">", "value": 20.0},
+            ],
+        },
+    ],
 }
 ```
 
@@ -175,6 +181,83 @@ with XlsbWorkbook("workbook.xlsb") as wb:
         loc = pt.get("location") or {}
         geom = loc.get("rfx_geom") or {}
         print(f"  range: {geom.get('top_left')}:{geom.get('bottom_right')}")
+```
+
+### Read filters
+
+`iter_filters()` yields `(sheet_name: str, filter_info: dict | None)` for every sheet. `filter_info` is `None` when a sheet has no AutoFilter.
+
+The dict describes the AutoFilter range and the criteria applied to each filtered column:
+
+```python
+{
+    "range": {
+        "top_left":     "A1",   # str — first cell of the AutoFilter range
+        "bottom_right": "M241", # str — last cell of the AutoFilter range
+    },
+    "columns": [
+        {
+            "column_index": 12,         # int — 0-based column index within the range
+            "filters": [],              # list[str] — simple string-match values (BrtFilter)
+            "custom_filters": {         # present when comparison criteria are used
+                "logic": "and",         # "and" | "or" — how multiple criteria combine
+                "criteria": [
+                    {
+                        "operator": ">",  # "<" | "<=" | "=" | ">=" | ">" | "<>"
+                        "value": 1.0,     # float | bool | str | None
+                    },
+                ],
+            },
+        },
+    ],
+}
+```
+
+PivotTable value filters are exposed via `iter_pivot_tables()` in the `"sx_filters"` key:
+
+```python
+{
+    # ... other pivot fields ...
+    "sx_filters": [
+        {
+            "field_index": 2,     # int — 0-based index of the filtered pivot field
+            "filter_type": 20,    # int — PivotFilterType value (e.g. 20 = valueGreaterThan)
+            "criteria": [
+                {
+                    "operator": ">",
+                    "value": 20.0,
+                },
+            ],
+        },
+    ],
+}
+```
+
+```python
+with XlsbWorkbook("workbook.xlsb") as wb:
+    for sheet_name, finfo in wb.iter_filters():
+        if finfo is None:
+            continue
+        r = finfo["range"]
+        print(f"{sheet_name}: AutoFilter on {r['top_left']}:{r['bottom_right']}")
+        for col in finfo["columns"]:
+            cf = col.get("custom_filters")
+            if cf:
+                for c in cf["criteria"]:
+                    print(f"  col {col['column_index']}: {c['operator']} {c['value']!r}")
+            for val in col.get("filters", []):
+                print(f"  col {col['column_index']}: = {val!r}")
+
+    for pt in wb.iter_pivot_tables():
+        for sf in pt.get("sx_filters", []):
+            for c in sf["criteria"]:
+                print(
+                    f"{pt['name']}: field {sf['field_index']} "
+                    f"(type {sf['filter_type']}) {c['operator']} {c['value']!r}"
+                )
+# Sheet1: AutoFilter on A1:M241
+#   col 12: > 1.0
+# PivotTable3: field 2 (type 20) > 20.0
 ```
 
 ### Filter to a specific sheet
