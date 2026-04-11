@@ -3,7 +3,7 @@ import json
 import pprint
 from typing import Dict, List, Optional, Tuple
 
-from xlsb_reader._reader import XlsbWorkbook, col_to_letter
+from xlsb_reader._reader import col_to_letter
 
 
 def _cellmap(formulas: Dict[Tuple[int, int], str]) -> Dict[str, str]:

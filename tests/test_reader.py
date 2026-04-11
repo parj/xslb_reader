@@ -1,7 +1,8 @@
 import pytest
 from xlsb_reader import XlsbWorkbook, XlsxWorkbook
 from xlsb_reader._vba_reader import _decompress
-import sys, os
+import sys
+import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from create_test_xlsm import _compress
 from pathlib import Path

@@ -273,7 +273,6 @@ def _parse_worksheet_formulas(
             f_si = f_el.get("si", "")
             f_ref = f_el.get("ref", "")  # e.g. "K2:K65" for shared anchor
             f_ca = f_el.get("ca", "0")
-            is_array = f_el.get("aca", "0") == "1"  # array context attribute
 
             if f_type == "array":
                 # Array formula: wrap in braces
