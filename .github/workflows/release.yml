@@ -1,7 +1,9 @@
 name: Release
 
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [main]
 
 permissions:
@@ -10,18 +12,20 @@ permissions:
 
 jobs:
   release:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     environment: pypi
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_branch }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Check for bump keyword
         id: bump
         run: |
-          MSG="${{ github.event.head_commit.message }}"
+          MSG="${{ github.event.workflow_run.head_commit.message }}"
           if echo "$MSG" | grep -qE '^bump: (patch|minor|major|rc)'; then
             BUMP_TYPE=$(echo "$MSG" | grep -oE 'bump: (patch|minor|major|rc)' | awk '{print $2}')
             echo "type=$BUMP_TYPE" >> "$GITHUB_OUTPUT"

@@ -1,9 +1,15 @@
 ![Claude](https://img.shields.io/badge/Claude-D97757?style=for-the-badge&logo=claude&logoColor=white) ![ChatGPT](https://img.shields.io/badge/chatGPT-74aa9c?style=for-the-badge&logo=openai&logoColor=white) ![GitHub Actions](https://img.shields.io/badge/github%20actions-%232671E5.svg?style=for-the-badge&logo=githubactions&logoColor=white)
 # xlsb_reader
 
-A pure-Python module for reading Excel Binary Workbook (`.xlsb`) files.
+A pure-Python module for reading Excel workbooks with no third-party dependencies (stdlib only).
 
-The [XLSB format](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-xlsb/acc8aa92-1f02-4167-99f5-84f9f676b95a) published from Microsoft was used to code this up.
+Supported formats:
+
+| Format | Extension | Class |
+|--------|-----------|-------|
+| Excel Binary Workbook | `.xlsb` | `XlsbWorkbook` |
+| Excel Open XML Workbook | `.xlsx` | `XlsxWorkbook` |
+| Excel Macro-Enabled Workbook | `.xlsm` | `XlsxWorkbook` |
 
 > [!WARNING]  
 > This has been coded using a mixture of claude (sonnet 4.5) and codex (gpt-5.3 codex).
@@ -13,6 +19,33 @@ Supports reading:
 - Values
 - Pivot tables
 - Filters (worksheet AutoFilter and PivotTable value filters)
+- VBA module source code (`.xlsm` / `.xlsb` files with embedded VBA)
+
+---
+
+## Module structure
+
+```
+xlsb_reader/
+├── __init__.py          # exports: XlsbWorkbook, XlsxWorkbook, col_to_letter
+├── _reader.py           # XlsbWorkbook — .xlsb binary format parser
+├── _xlsx_reader.py      # XlsxWorkbook — .xlsx / .xlsm Open XML parser
+├── _vba_reader.py       # read_vba_modules(cfb_data) — OLE/OVBA extractor
+└── _cli.py              # CLI entry point (xlsb_reader command)
+```
+
+Both `XlsbWorkbook` and `XlsxWorkbook` expose the **same public API**:
+
+| Method | Returns | Notes |
+|--------|---------|-------|
+| `.sheet_names` | `list[str]` | Ordered sheet names |
+| `.iter_formulas()` | `Iterator[(sheet, {(row,col): str})]` | Formula strings start with `=` |
+| `.iter_values()` | `Iterator[(sheet, {(row,col): value})]` | `int \| float \| str \| bool` |
+| `.iter_pivot_tables()` | `Iterator[dict]` | One dict per pivot table |
+| `.iter_filters()` | `Iterator[dict]` | One dict per sheet with AutoFilter |
+| `.iter_vba_modules()` | `dict[str, str]` | VBA only; empty dict if none |
+
+`row` and `col` are always **0-based** integers.
 
 ---
 
@@ -26,66 +59,96 @@ pip install xlsb_reader
 
 ## CLI Usage
 
-The `xlsb_reader` command extracts formulas, values, and pivot table metadata from an `.xlsb` file.
+The `xlsb_reader` command works with `.xlsb`, `.xlsx`, and `.xlsm` files. It auto-detects the format from the file extension.
 
 ```
-xlsb_reader <path> [sheet_name] [--format dict|json|markdown] [--include formulas,values,pivots,filters]
+xlsb_reader <path> [sheet_name] [--format dict|json|markdown] [--include formulas,values,pivots,filters,vba]
 ```
 
 ### Output all data (default dict format)
 
 ```bash
 xlsb_reader workbook.xlsb
+xlsb_reader workbook.xlsx
+xlsb_reader workbook.xlsm
 ```
 
 ### Filter to a single sheet
 
 ```bash
 xlsb_reader workbook.xlsb "Sheet1"
+xlsb_reader workbook.xlsx "Sheet1"
 ```
 
 ### JSON output
 
 ```bash
 xlsb_reader workbook.xlsb --format json
+xlsb_reader workbook.xlsx --format json
 ```
 
 ### Markdown output
 
 ```bash
 xlsb_reader workbook.xlsb --format markdown
+xlsb_reader workbook.xlsx --format markdown
 ```
 
 ### Only formulas, as JSON
 
 ```bash
 xlsb_reader workbook.xlsb --include formulas --format json
+xlsb_reader workbook.xlsx --include formulas --format json
 ```
 
 ### Only values from a specific sheet
 
 ```bash
 xlsb_reader workbook.xlsb "Sheet1" --include values --format json
+xlsb_reader workbook.xlsx "Sheet1" --include values --format json
 ```
 
 ### Only pivot table metadata
 
 ```bash
 xlsb_reader workbook.xlsb --include pivots --format json
+xlsb_reader workbook.xlsx --include pivots --format json
+```
+
+### Extract VBA source (xlsm / xlsb with macros)
+
+```bash
+xlsb_reader workbook.xlsm --include vba --format markdown
+xlsb_reader workbook.xlsb --include vba --format json
 ```
 
 ---
 
-## Python Module Usage
+## Python API
+
+### Imports
 
 ```python
+# For .xlsb files
 from xlsb_reader import XlsbWorkbook, col_to_letter
+
+# For .xlsx / .xlsm files
+from xlsb_reader import XlsxWorkbook, col_to_letter
+
+# Or import both
+from xlsb_reader import XlsbWorkbook, XlsxWorkbook, col_to_letter
 ```
 
 ### List sheet names
 
 ```python
+# .xlsb
 with XlsbWorkbook("workbook.xlsb") as wb:
+    print(wb.sheet_names)
+# ['Sheet1', 'Sheet2', 'Summary']
+
+# .xlsx / .xlsm
+with XlsxWorkbook("workbook.xlsx") as wb:
     print(wb.sheet_names)
 # ['Sheet1', 'Sheet2', 'Summary']
 ```
@@ -98,6 +161,7 @@ Formula strings always start with `=`. If a formula cannot be decoded, the value
 `=<parse_error:...>` rather than raising an exception — filter these out if needed:
 
 ```python
+# Works identically for XlsbWorkbook and XlsxWorkbook
 with XlsbWorkbook("workbook.xlsb") as wb:
     for sheet_name, formulas in wb.iter_formulas():
         for (row, col), formula in sorted(formulas.items()):
@@ -111,7 +175,7 @@ with XlsbWorkbook("workbook.xlsb") as wb:
 
 ### Read all cell values
 
-`iter_values()` yields `(sheet_name: str, values: dict[tuple[int, int], str | int | float | bool | str])`.
+`iter_values()` yields `(sheet_name: str, values: dict[tuple[int, int], str | int | float | bool])`.
 
 Possible value types per cell:
 
@@ -124,7 +188,8 @@ Possible value types per cell:
 | `str` (error) | `"#DIV/0!"` | Excel error; possible values: `#DIV/0!`, `#N/A`, `#NAME?`, `#NULL!`, `#NUM!`, `#REF!`, `#VALUE!` |
 
 ```python
-with XlsbWorkbook("workbook.xlsb") as wb:
+# Works identically for XlsbWorkbook and XlsxWorkbook
+with XlsxWorkbook("workbook.xlsx") as wb:
     for sheet_name, values in wb.iter_values():
         for (row, col), value in sorted(values.items()):
             cell = f"{col_to_letter(col)}{row + 1}"
@@ -173,7 +238,8 @@ with XlsbWorkbook("workbook.xlsb") as wb:
 ```
 
 ```python
-with XlsbWorkbook("workbook.xlsb") as wb:
+# Works identically for XlsbWorkbook and XlsxWorkbook
+with XlsxWorkbook("workbook.xlsx") as wb:
     for pt in wb.iter_pivot_tables():
         print(pt["name"], "on sheet:", pt["sheet"])
         print("  cache_id:", pt.get("cache_id"))
@@ -185,11 +251,12 @@ with XlsbWorkbook("workbook.xlsb") as wb:
 
 ### Read filters
 
-`iter_filters()` yields `(sheet_name: str, filter_info: dict | None)` for every sheet. `filter_info` is `None` when a sheet has no AutoFilter.
+`iter_filters()` yields one `dict` per sheet that has an AutoFilter (sheets without a filter are skipped).
 
 The dict describes the AutoFilter range and the criteria applied to each filtered column:
 
 ```python
+# XlsbWorkbook filter dict schema
 {
     "range": {
         "top_left":     "A1",   # str — first cell of the AutoFilter range
@@ -208,6 +275,29 @@ The dict describes the AutoFilter range and the criteria applied to each filtere
                     },
                 ],
             },
+        },
+    ],
+}
+
+# XlsxWorkbook filter dict schema
+{
+    "sheet": "Sheet1",          # str — sheet name
+    "ref": "A1:M241",           # str — autoFilter range reference
+    "columns": [
+        {
+            "col_id": 12,               # int — 0-based column index within the range
+            "type": "custom",           # "custom" | "discrete" | "top10" | "dynamic"
+            # For type="custom":
+            "conditions": [
+                {
+                    "operator": "greaterThan",  # OOXML operator name
+                    "val": "1.0",               # str — the comparison value
+                },
+            ],
+            # For type="discrete":
+            # "values": ["Apple", "Banana"],   # list[str]
+            # For type="top10" or "dynamic":
+            # "attrs": {...},                  # raw XML attributes dict
         },
     ],
 }
@@ -234,12 +324,11 @@ PivotTable value filters are exposed via `iter_pivot_tables()` in the `"sx_filte
 ```
 
 ```python
+# XlsbWorkbook — iter_filters() yields dicts with "range" and "columns" keys
 with XlsbWorkbook("workbook.xlsb") as wb:
-    for sheet_name, finfo in wb.iter_filters():
-        if finfo is None:
-            continue
+    for finfo in wb.iter_filters():
         r = finfo["range"]
-        print(f"{sheet_name}: AutoFilter on {r['top_left']}:{r['bottom_right']}")
+        print(f"AutoFilter on {r['top_left']}:{r['bottom_right']}")
         for col in finfo["columns"]:
             cf = col.get("custom_filters")
             if cf:
@@ -248,6 +337,21 @@ with XlsbWorkbook("workbook.xlsb") as wb:
             for val in col.get("filters", []):
                 print(f"  col {col['column_index']}: = {val!r}")
 
+# XlsxWorkbook — iter_filters() yields dicts with "sheet", "ref", and "columns" keys
+with XlsxWorkbook("workbook.xlsx") as wb:
+    for finfo in wb.iter_filters():
+        print(f"{finfo['sheet']}: AutoFilter on {finfo['ref']}")
+        for col in finfo["columns"]:
+            col_type = col.get("type", "")
+            if col_type == "custom":
+                for c in col.get("conditions", []):
+                    print(f"  col {col['col_id']}: {c['operator']} {c['val']!r}")
+            elif col_type == "discrete":
+                for val in col.get("values", []):
+                    print(f"  col {col['col_id']}: = {val!r}")
+
+# PivotTable filters (same for both workbook types)
+with XlsxWorkbook("workbook.xlsx") as wb:
     for pt in wb.iter_pivot_tables():
         for sf in pt.get("sx_filters", []):
             for c in sf["criteria"]:
@@ -255,14 +359,35 @@ with XlsbWorkbook("workbook.xlsb") as wb:
                     f"{pt['name']}: field {sf['field_index']} "
                     f"(type {sf['filter_type']}) {c['operator']} {c['value']!r}"
                 )
-# Sheet1: AutoFilter on A1:M241
-#   col 12: > 1.0
-# PivotTable3: field 2 (type 20) > 20.0
+```
+
+### Read VBA module source
+
+`iter_vba_modules()` returns `dict[str, str]` mapping module name to plain-text VBA source.
+Returns an empty dict if the workbook contains no VBA project.
+
+Works for `.xlsm` files (macro-enabled Open XML) and `.xlsb` files with embedded VBA.
+
+```python
+# .xlsm — macro-enabled workbook
+with XlsxWorkbook("workbook.xlsm") as wb:
+    modules = wb.iter_vba_modules()
+    for module_name, source in modules.items():
+        print(f"--- {module_name} ---")
+        print(source)
+
+# .xlsb — binary workbook with macros
+with XlsbWorkbook("workbook.xlsb") as wb:
+    modules = wb.iter_vba_modules()
+    for module_name, source in modules.items():
+        print(f"--- {module_name} ---")
+        print(source)
 ```
 
 ### Filter to a specific sheet
 
 ```python
+# Works identically for XlsbWorkbook and XlsxWorkbook
 with XlsbWorkbook("workbook.xlsb") as wb:
     for sheet_name, formulas in wb.iter_formulas():
         if sheet_name != "Sheet1":
@@ -285,4 +410,20 @@ col_to_letter(26)  # 'AA'
 row, col = 2, 3    # 0-based → D3
 cell = f"{col_to_letter(col)}{row + 1}"
 print(cell)        # 'D3'
+```
+
+### Select workbook class by file extension
+
+```python
+import pathlib
+from xlsb_reader import XlsbWorkbook, XlsxWorkbook
+
+def open_workbook(path: str):
+    suffix = pathlib.Path(path).suffix.lower()
+    if suffix in (".xlsx", ".xlsm"):
+        return XlsxWorkbook(path)
+    return XlsbWorkbook(path)
+
+with open_workbook("data.xlsx") as wb:
+    print(wb.sheet_names)
 ```
