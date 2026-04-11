@@ -22,7 +22,7 @@ def _cellmap_any(cells: Dict[Tuple[int, int], object]) -> Dict[str, object]:
 
 
 def _collect_formulas(
-    wb: XlsbWorkbook,
+    wb,
     filter_sheet: Optional[str] = None,
 ) -> Dict[str, Dict[str, str]]:
     out: Dict[str, Dict[str, str]] = {}
@@ -35,7 +35,7 @@ def _collect_formulas(
 
 
 def _collect_values(
-    wb: XlsbWorkbook,
+    wb,
     filter_sheet: Optional[str] = None,
 ) -> Dict[str, Dict[str, object]]:
     out: Dict[str, Dict[str, object]] = {}
@@ -48,7 +48,7 @@ def _collect_values(
 
 
 def _collect_pivots(
-    wb: XlsbWorkbook,
+    wb,
     filter_sheet: Optional[str] = None,
 ) -> List[Dict[str, object]]:
     out: List[Dict[str, object]] = []
@@ -59,11 +59,21 @@ def _collect_pivots(
     return out
 
 
+def _collect_filters(wb, filter_sheet=None):
+    out = []
+    for f in wb.iter_filters():
+        if filter_sheet and f.get("sheet") != filter_sheet:
+            continue
+        out.append(f)
+    return out
+
+
 def _as_markdown(
     sheets: List[str],
     formulas: Optional[Dict[str, Dict[str, str]]] = None,
     values: Optional[Dict[str, Dict[str, object]]] = None,
     pivots: Optional[List[Dict[str, object]]] = None,
+    filters: Optional[List[Dict[str, object]]] = None,
 ) -> str:
     lines: List[str] = [f"Sheets: {', '.join(sheets)}", ""]
     emitted = False
@@ -106,6 +116,32 @@ def _as_markdown(
                             f"fields: `{pt.get('pivot_fields')}`; "
                             f"items: `{pt.get('pivot_items')}`"
                         )
+    if filters:
+        emitted = True
+        lines.append("## Filters")
+        lines.append("")
+        by_sheet: Dict[str, List[Dict[str, object]]] = {}
+        for f in filters:
+            sheet = f.get("sheet") or "<unknown>"
+            by_sheet.setdefault(sheet, []).append(f)
+        for sheet, sheet_filters in by_sheet.items():
+            lines.append(f"### {sheet}")
+            for f in sheet_filters:
+                ref = f.get("ref", "")
+                columns = f.get("columns", [])
+                if columns:
+                    for col in columns:
+                        col_id = col.get("col_id", "?")
+                        col_type = col.get("type", "")
+                        conditions = col.get("conditions", [])
+                        cond_str = "; ".join(
+                            f"{c.get('operator', '')} {c.get('val', '')}"
+                            for c in conditions
+                        ) if conditions else str(col.get("attrs", ""))
+                        lines.append(f"- `{ref}` — column {col_id}: {col_type} {cond_str}")
+                else:
+                    lines.append(f"- `{ref}`")
+            lines.append("")
     if not emitted:
         lines.append("(no formulas found)")
         return "\n".join(lines)
@@ -116,9 +152,9 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Extract formulas, values, and pivot metadata from an .xlsb workbook."
+        description="Extract formulas, values, pivot metadata, and filters from an .xlsb or .xlsx workbook."
     )
-    parser.add_argument("path", help="Path to .xlsb file")
+    parser.add_argument("path", help="Path to .xlsb or .xlsx file")
     parser.add_argument(
         "sheet_name", nargs="?", default=None, help="Optional sheet name filter"
     )
@@ -132,11 +168,16 @@ def main():
     parser.add_argument(
         "--include",
         default="formulas,values,pivots",
-        help="Comma-separated sections: formulas,values,pivots (default: formulas,values,pivots)",
+        help="Comma-separated sections: formulas,values,pivots,filters,vba (default: formulas,values,pivots)",
     )
     args = parser.parse_args()
 
-    with XlsbWorkbook(args.path) as wb:
+    if args.path.lower().endswith((".xlsx", ".xlsm")):
+        from xlsb_reader._xlsx_reader import XlsxWorkbook as WorkbookClass
+    else:
+        from xlsb_reader._reader import XlsbWorkbook as WorkbookClass
+
+    with WorkbookClass(args.path) as wb:
         includes = {s.strip().lower() for s in args.include.split(",") if s.strip()}
         formulas = (
             _collect_formulas(wb, filter_sheet=args.sheet_name)
@@ -160,18 +201,34 @@ def main():
             data["values"] = values
         if "pivots" in includes:
             data["pivot_tables"] = pivots
+        filters: List[Dict[str, object]] = []
+        if "filters" in includes and hasattr(wb, "iter_filters"):
+            filters = _collect_filters(wb, filter_sheet=args.sheet_name)
+            data["filters"] = filters
+        vba: Dict[str, str] = {}
+        if "vba" in includes and hasattr(wb, "iter_vba_modules"):
+            vba = wb.iter_vba_modules()
+            data["vba_modules"] = vba
         if args.output_format == "json":
             print(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True))
         elif args.output_format == "markdown":
-            print(
-                _as_markdown(
-                    wb.sheet_names,
-                    formulas=formulas if "formulas" in includes else None,
-                    values=values if "values" in includes else None,
-                    pivots=pivots if "pivots" in includes else None,
-                ),
-                end="",
+            md = _as_markdown(
+                wb.sheet_names,
+                formulas=formulas if "formulas" in includes else None,
+                values=values if "values" in includes else None,
+                pivots=pivots if "pivots" in includes else None,
+                filters=filters if "filters" in includes else None,
             )
+            if vba:
+                vba_lines = ["## VBA Modules", ""]
+                for mod_name, src in vba.items():
+                    vba_lines.append(f"### {mod_name}")
+                    vba_lines.append("```vba")
+                    vba_lines.append(src.rstrip())
+                    vba_lines.append("```")
+                    vba_lines.append("")
+                md = md.rstrip() + "\n\n" + "\n".join(vba_lines)
+            print(md, end="")
         else:
             print(pprint.pformat(data, sort_dicts=True))
 
