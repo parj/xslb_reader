@@ -15,6 +15,7 @@ Public API:
 
 No third-party dependencies — stdlib only.
 """
+
 from __future__ import annotations
 
 import math
@@ -25,17 +26,18 @@ from typing import Dict, List, Optional
 # CFB (OLE Compound File Binary) constants
 # ---------------------------------------------------------------------------
 
-_FREESECT   = 0xFFFFFFFF
+_FREESECT = 0xFFFFFFFF
 _ENDOFCHAIN = 0xFFFFFFFE
-_FATSECT    = 0xFFFFFFFD
-_DIFSECT    = 0xFFFFFFFC
-_NOSTREAM   = 0xFFFFFFFF
+_FATSECT = 0xFFFFFFFD
+_DIFSECT = 0xFFFFFFFC
+_NOSTREAM = 0xFFFFFFFF
 
-_CFB_MAGIC  = b'\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1'
+_CFB_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 
 # ---------------------------------------------------------------------------
 # CFB reader
 # ---------------------------------------------------------------------------
+
 
 def _cfb_read_streams(data: bytes) -> Dict[str, bytes]:
     """
@@ -49,29 +51,29 @@ def _cfb_read_streams(data: bytes) -> Dict[str, bytes]:
         raise ValueError("Not a valid CFB/OLE2 file (bad magic)")
 
     # Header fields (all little-endian)
-    sec_size_exp      = struct.unpack_from('<H', data, 30)[0]
-    mini_sec_size_exp = struct.unpack_from('<H', data, 32)[0]
-    first_dir_sec     = struct.unpack_from('<I', data, 48)[0]
-    mini_cutoff       = struct.unpack_from('<I', data, 56)[0]
-    first_minifat_sec = struct.unpack_from('<I', data, 60)[0]
+    sec_size_exp = struct.unpack_from("<H", data, 30)[0]
+    mini_sec_size_exp = struct.unpack_from("<H", data, 32)[0]
+    first_dir_sec = struct.unpack_from("<I", data, 48)[0]
+    mini_cutoff = struct.unpack_from("<I", data, 56)[0]
+    first_minifat_sec = struct.unpack_from("<I", data, 60)[0]
 
-    sec_size  = 1 << sec_size_exp       # 512 for major version 3
+    sec_size = 1 << sec_size_exp  # 512 for major version 3
     mini_size = 1 << mini_sec_size_exp  # typically 64
 
     def sec_offset(sec_id: int) -> int:
-        return 512 + sec_id * sec_size   # header occupies first 512 bytes
+        return 512 + sec_id * sec_size  # header occupies first 512 bytes
 
     # Build FAT from DIFAT entries embedded in the header (up to 109 sectors)
-    difat = struct.unpack_from('<109I', data, 76)
+    difat = struct.unpack_from("<109I", data, 76)
     fat_bytes = bytearray()
     for sec_id in difat:
         if sec_id in (_FREESECT, _ENDOFCHAIN, _DIFSECT):
             break
         off = sec_offset(sec_id)
-        fat_bytes.extend(data[off: off + sec_size])
+        fat_bytes.extend(data[off : off + sec_size])
 
     n_fat = len(fat_bytes) // 4
-    fat   = struct.unpack_from(f'<{n_fat}I', fat_bytes) if n_fat else ()
+    fat = struct.unpack_from(f"<{n_fat}I", fat_bytes) if n_fat else ()
 
     def read_chain(first_sec: int) -> bytes:
         """Follow FAT chain and concatenate sector contents."""
@@ -79,9 +81,9 @@ def _cfb_read_streams(data: bytes) -> Dict[str, bytes]:
         sec = first_sec
         while sec not in (_ENDOFCHAIN, _FREESECT) and sec < n_fat:
             off = sec_offset(sec)
-            chunks.append(data[off: off + sec_size])
+            chunks.append(data[off : off + sec_size])
             sec = fat[sec]
-        return b''.join(chunks)
+        return b"".join(chunks)
 
     # Directory
     dir_bytes = read_chain(first_dir_sec)
@@ -89,55 +91,61 @@ def _cfb_read_streams(data: bytes) -> Dict[str, bytes]:
 
     entries: Dict[int, Optional[dict]] = {}
     for i in range(n_entries):
-        e = dir_bytes[i * 128: (i + 1) * 128]
-        name_len = struct.unpack_from('<H', e, 64)[0]
+        e = dir_bytes[i * 128 : (i + 1) * 128]
+        name_len = struct.unpack_from("<H", e, 64)[0]
         if name_len < 2:
             entries[i] = None
             continue
-        name     = e[: name_len - 2].decode('utf-16-le', errors='replace')
-        obj_type = e[66]           # 0=empty 1=storage 2=stream 5=root
-        left_id  = struct.unpack_from('<I', e, 68)[0]
-        right_id = struct.unpack_from('<I', e, 72)[0]
-        child_id = struct.unpack_from('<I', e, 76)[0]
-        start    = struct.unpack_from('<I', e, 116)[0]
-        size     = struct.unpack_from('<I', e, 120)[0]
+        name = e[: name_len - 2].decode("utf-16-le", errors="replace")
+        obj_type = e[66]  # 0=empty 1=storage 2=stream 5=root
+        left_id = struct.unpack_from("<I", e, 68)[0]
+        right_id = struct.unpack_from("<I", e, 72)[0]
+        child_id = struct.unpack_from("<I", e, 76)[0]
+        start = struct.unpack_from("<I", e, 116)[0]
+        size = struct.unpack_from("<I", e, 120)[0]
         entries[i] = {
-            'name': name, 'type': obj_type,
-            'left': left_id, 'right': right_id, 'child': child_id,
-            'start': start, 'size': size,
+            "name": name,
+            "type": obj_type,
+            "left": left_id,
+            "right": right_id,
+            "child": child_id,
+            "start": start,
+            "size": size,
         }
 
     # Mini FAT
     if first_minifat_sec not in (_ENDOFCHAIN, _FREESECT):
         mf_bytes = read_chain(first_minifat_sec)
-        n_mf     = len(mf_bytes) // 4
-        mini_fat: tuple = struct.unpack_from(f'<{n_mf}I', mf_bytes) if n_mf else ()
+        n_mf = len(mf_bytes) // 4
+        mini_fat: tuple = struct.unpack_from(f"<{n_mf}I", mf_bytes) if n_mf else ()
     else:
         mini_fat = ()
 
     # Mini stream lives in root entry's (SID 0) regular-sector chain
     root = entries.get(0)
-    mini_stream = b''
-    if root and root['start'] not in (_ENDOFCHAIN, _FREESECT):
-        mini_stream = read_chain(root['start'])
+    mini_stream = b""
+    if root and root["start"] not in (_ENDOFCHAIN, _FREESECT):
+        mini_stream = read_chain(root["start"])
 
     def read_mini_chain(first_sec: int, size: int) -> bytes:
         chunks: List[bytes] = []
         sec = first_sec
         while sec not in (_ENDOFCHAIN, _FREESECT) and sec < len(mini_fat):
             off = sec * mini_size
-            chunks.append(mini_stream[off: off + mini_size])
+            chunks.append(mini_stream[off : off + mini_size])
             sec = mini_fat[sec]
-        return b''.join(chunks)[:size]
+        return b"".join(chunks)[:size]
 
     def read_stream(entry: dict) -> bytes:
         # Streams smaller than mini_cutoff live in the mini stream
-        if (entry['size'] < mini_cutoff
-                and root
-                and root['start'] not in (_ENDOFCHAIN, _FREESECT)
-                and mini_fat):
-            return read_mini_chain(entry['start'], entry['size'])
-        return read_chain(entry['start'])[: entry['size']]
+        if (
+            entry["size"] < mini_cutoff
+            and root
+            and root["start"] not in (_ENDOFCHAIN, _FREESECT)
+            and mini_fat
+        ):
+            return read_mini_chain(entry["start"], entry["size"])
+        return read_chain(entry["start"])[: entry["size"]]
 
     # Walk the red-black tree rooted at a given SID
     def walk_rb(sid: int):
@@ -147,34 +155,35 @@ def _cfb_read_streams(data: bytes) -> Dict[str, bytes]:
         if e is None:
             return
         yield sid
-        yield from walk_rb(e['left'])
-        yield from walk_rb(e['right'])
+        yield from walk_rb(e["left"])
+        yield from walk_rb(e["right"])
 
     # DFS over the directory tree collecting all streams with paths
     def collect(parent_sid: int, path_prefix: str, result: Dict[str, bytes]) -> None:
         e = entries.get(parent_sid)
         if e is None:
             return
-        for sid in walk_rb(e['child']):
+        for sid in walk_rb(e["child"]):
             child = entries.get(sid)
             if child is None:
                 continue
             child_path = (
-                f"{path_prefix}/{child['name']}" if path_prefix else child['name']
+                f"{path_prefix}/{child['name']}" if path_prefix else child["name"]
             )
-            if child['type'] == 2:           # stream
+            if child["type"] == 2:  # stream
                 result[child_path.upper()] = read_stream(child)
-            elif child['type'] in (1, 5):    # storage
+            elif child["type"] in (1, 5):  # storage
                 collect(sid, child_path, result)
 
     streams: Dict[str, bytes] = {}
-    collect(0, '', streams)
+    collect(0, "", streams)
     return streams
 
 
 # ---------------------------------------------------------------------------
 # MS-OVBA Decompressor (§2.4.1.3.1)
 # ---------------------------------------------------------------------------
+
 
 def _decompress(compressed: bytes) -> bytes:
     """Decompress an MS-OVBA CompressedContainer.
@@ -189,26 +198,26 @@ def _decompress(compressed: bytes) -> bytes:
         )
 
     out = bytearray()
-    pos = 1   # skip SignatureByte
-    n   = len(compressed)
+    pos = 1  # skip SignatureByte
+    n = len(compressed)
 
     while pos < n:
         if pos + 2 > n:
             break  # truncated
 
         # --- CompressedChunkHeader (§2.4.1.1.5) ---
-        header          = struct.unpack_from('<H', compressed, pos)[0]
-        chunk_size      = (header & 0x0FFF) + 3   # Extract CompressedChunkSize
-        compressed_flag = (header >> 15) & 1       # 1=compressed  0=raw
+        header = struct.unpack_from("<H", compressed, pos)[0]
+        chunk_size = (header & 0x0FFF) + 3  # Extract CompressedChunkSize
+        compressed_flag = (header >> 15) & 1  # 1=compressed  0=raw
 
-        chunk_start     = pos
+        chunk_start = pos
         decomp_chunk_st = len(out)
-        chunk_end       = min(n, chunk_start + chunk_size)
-        pos            += 2  # past 2-byte header
+        chunk_end = min(n, chunk_start + chunk_size)
+        pos += 2  # past 2-byte header
 
         if compressed_flag == 0:
             # Decompressing a RawChunk (§2.4.1.3.3): copy 4096 verbatim bytes
-            out.extend(compressed[pos: pos + 4096])
+            out.extend(compressed[pos : pos + 4096])
             pos += 4096
         else:
             # Decompressing via TokenSequences (§2.4.1.3.4)
@@ -229,22 +238,21 @@ def _decompress(compressed: bytes) -> bytes:
                         # CopyToken (§2.4.1.1.8)
                         if pos + 2 > chunk_end:
                             break
-                        token = struct.unpack_from('<H', compressed, pos)[0]
-                        pos  += 2
+                        token = struct.unpack_from("<H", compressed, pos)[0]
+                        pos += 2
 
                         # CopyToken Help (§2.4.1.3.19.1) — derive bit masks
                         difference = len(out) - decomp_chunk_st
-                        bit_count  = max(
-                            math.ceil(math.log2(difference)) if difference > 1 else 1,
-                            4
+                        bit_count = max(
+                            math.ceil(math.log2(difference)) if difference > 1 else 1, 4
                         )
                         length_mask = 0xFFFF >> bit_count
                         offset_mask = (~length_mask) & 0xFFFF
 
                         # Unpack CopyToken (§2.4.1.3.19.2)
                         length = (token & length_mask) + 3
-                        temp1  = token & offset_mask
-                        temp2  = 16 - bit_count
+                        temp1 = token & offset_mask
+                        temp2 = 16 - bit_count
                         offset = (temp1 >> temp2) + 1
 
                         # Byte Copy (§2.4.1.3.11) — source may overlap dest
@@ -260,6 +268,7 @@ def _decompress(compressed: bytes) -> bytes:
 # dir Stream Parser (§2.3.4.2)
 # ---------------------------------------------------------------------------
 
+
 def _parse_dir(data: bytes) -> List[dict]:
     """
     Parse a decompressed dir stream and return a list of module descriptors:
@@ -270,17 +279,17 @@ def _parse_dir(data: bytes) -> List[dict]:
     modules: List[dict] = []
     cur: Optional[dict] = None
     pos = 0
-    n   = len(data)
+    n = len(data)
 
     def ru16() -> int:
         nonlocal pos
-        v = struct.unpack_from('<H', data, pos)[0]
+        v = struct.unpack_from("<H", data, pos)[0]
         pos += 2
         return v
 
     def ru32() -> int:
         nonlocal pos
-        v = struct.unpack_from('<I', data, pos)[0]
+        v = struct.unpack_from("<I", data, pos)[0]
         pos += 4
         return v
 
@@ -290,12 +299,12 @@ def _parse_dir(data: bytes) -> List[dict]:
         Layout: Reserved(2 bytes) + SizeOfUnicode(4 bytes) + Unicode(Size bytes)
         """
         nonlocal pos
-        pos += 2        # Reserved
+        pos += 2  # Reserved
         uni_size = ru32()
         pos += uni_size
 
     while pos + 6 <= n:
-        rec_id   = ru16()
+        rec_id = ru16()
         rec_size = ru32()
 
         if pos + rec_size > n:
@@ -324,7 +333,7 @@ def _parse_dir(data: bytes) -> List[dict]:
         elif rec_id == 0x0009:
             # PROJECTVERSION: rec_size covers MajorVersion(4); MinorVersion(2) follows
             pos += rec_size  # MajorVersion
-            pos += 2         # MinorVersion
+            pos += 2  # MinorVersion
 
         elif rec_id in (0x0005, 0x0006, 0x000C):
             # PROJECTDOCSTRING / PROJECTHELPFILEPATH / PROJECTCONSTANTS
@@ -348,11 +357,11 @@ def _parse_dir(data: bytes) -> List[dict]:
             # Part 1: SizeTwiddled bytes
             pos += rec_size
             # Part 2: optional NameRecordExtended (REFERENCENAME 0x0016)
-            if pos + 2 <= n and struct.unpack_from('<H', data, pos)[0] == 0x0016:
-                pos += 2               # Id
+            if pos + 2 <= n and struct.unpack_from("<H", data, pos)[0] == 0x0016:
+                pos += 2  # Id
                 ns = ru32()
-                pos += ns              # Name (MBCS)
-                skip_unicode_pair()    # Reserved + SizeUnicode + Unicode
+                pos += ns  # Name (MBCS)
+                skip_unicode_pair()  # Reserved + SizeUnicode + Unicode
             # Part 3: Reserved3(2) + SizeExtended(4) + SizeExtended bytes
             if pos + 2 <= n:
                 pos += 2  # Reserved3
@@ -363,20 +372,20 @@ def _parse_dir(data: bytes) -> List[dict]:
         # ── MODULE records ────────────────────────────────────────────────
         elif rec_id == 0x0019:
             # MODULENAME — starts a new module
-            if cur is not None and cur.get('stream'):
+            if cur is not None and cur.get("stream"):
                 modules.append(cur)
             cur = {
-                'name':   data[pos: pos + rec_size].decode('latin-1'),
-                'stream': '',
-                'offset': 0,
-                'type':   'procedural',
+                "name": data[pos : pos + rec_size].decode("latin-1"),
+                "stream": "",
+                "offset": 0,
+                "type": "procedural",
             }
             pos += rec_size
 
         elif rec_id == 0x001A:
             # MODULESTREAMNAME: MBCS payload + unicode companion
             if cur is not None:
-                cur['stream'] = data[pos: pos + rec_size].decode('latin-1')
+                cur["stream"] = data[pos : pos + rec_size].decode("latin-1")
             pos += rec_size
             skip_unicode_pair()
 
@@ -388,27 +397,27 @@ def _parse_dir(data: bytes) -> List[dict]:
         elif rec_id == 0x0031:
             # MODULEOFFSET
             if cur is not None:
-                cur['offset'] = struct.unpack_from('<I', data, pos)[0]
+                cur["offset"] = struct.unpack_from("<I", data, pos)[0]
             pos += rec_size
 
         elif rec_id == 0x0021:
             # MODULETYPE: procedural module
             if cur is not None:
-                cur['type'] = 'procedural'
-            pos += rec_size   # rec_size == 0
+                cur["type"] = "procedural"
+            pos += rec_size  # rec_size == 0
 
         elif rec_id == 0x0022:
             # MODULETYPE: class / document / designer module
             if cur is not None:
-                cur['type'] = 'class'
-            pos += rec_size   # rec_size == 0
+                cur["type"] = "class"
+            pos += rec_size  # rec_size == 0
 
         elif rec_id == 0x002B:
             # MODULE Terminator
-            if cur is not None and cur.get('stream'):
+            if cur is not None and cur.get("stream"):
                 modules.append(cur)
                 cur = None
-            pos += rec_size   # rec_size == 0
+            pos += rec_size  # rec_size == 0
             # Note: the OVBA spec defines 4 Reserved bytes here, but Excel
             # does not write them in practice — do not skip them.
 
@@ -416,7 +425,7 @@ def _parse_dir(data: bytes) -> List[dict]:
             # Unknown record — skip payload using Size field
             pos += rec_size
 
-    if cur is not None and cur.get('stream'):
+    if cur is not None and cur.get("stream"):
         modules.append(cur)
 
     return modules
@@ -425,6 +434,7 @@ def _parse_dir(data: bytes) -> List[dict]:
 # ---------------------------------------------------------------------------
 # Module Stream Extractor (§2.3.4.3)
 # ---------------------------------------------------------------------------
+
 
 def _extract_module_source(stream_data: bytes, text_offset: int) -> str:
     """Decompress and decode the VBA source from a module stream.
@@ -440,12 +450,13 @@ def _extract_module_source(stream_data: bytes, text_offset: int) -> str:
     compressed = stream_data[text_offset:]
     decompressed = _decompress(compressed)
     # VBA source is MBCS; latin-1 is a safe superset for ASCII VBA code
-    return decompressed.decode('latin-1')
+    return decompressed.decode("latin-1")
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def read_vba_modules(cfb_data: bytes) -> Dict[str, str]:
     """Extract VBA module source code from vbaProject.bin data.
@@ -464,19 +475,16 @@ def read_vba_modules(cfb_data: bytes) -> Dict[str, str]:
     streams = _cfb_read_streams(cfb_data)
 
     # Locate VBA/dir stream (case-insensitive)
-    dir_key = next(
-        (k for k in streams if k.endswith('/DIR') or k == 'DIR'),
-        None
-    )
+    dir_key = next((k for k in streams if k.endswith("/DIR") or k == "DIR"), None)
     if dir_key is None:
         raise ValueError("VBA/dir stream not found in CFB container")
 
-    dir_data   = _decompress(streams[dir_key])
-    mods_meta  = _parse_dir(dir_data)
+    dir_data = _decompress(streams[dir_key])
+    mods_meta = _parse_dir(dir_data)
 
     result: Dict[str, str] = {}
     for mod in mods_meta:
-        stream_name = mod.get('stream', '')
+        stream_name = mod.get("stream", "")
         if not stream_name:
             continue
 
@@ -488,14 +496,14 @@ def read_vba_modules(cfb_data: bytes) -> Dict[str, str]:
             # Fallback: search all keys ending with the stream name
             upper_name = stream_name.upper()
             for k, v in streams.items():
-                if k.endswith(f'/{upper_name}') or k == upper_name:
+                if k.endswith(f"/{upper_name}") or k == upper_name:
                     stream_data = v
                     break
 
         if stream_data is not None:
             try:
-                source = _extract_module_source(stream_data, mod['offset'])
-                result[mod['name']] = source
+                source = _extract_module_source(stream_data, mod["offset"])
+                result[mod["name"]] = source
             except Exception:
                 pass  # skip modules that fail to decompress
 

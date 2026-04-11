@@ -134,11 +134,17 @@ def _as_markdown(
                         col_id = col.get("col_id", "?")
                         col_type = col.get("type", "")
                         conditions = col.get("conditions", [])
-                        cond_str = "; ".join(
-                            f"{c.get('operator', '')} {c.get('val', '')}"
-                            for c in conditions
-                        ) if conditions else str(col.get("attrs", ""))
-                        lines.append(f"- `{ref}` — column {col_id}: {col_type} {cond_str}")
+                        cond_str = (
+                            "; ".join(
+                                f"{c.get('operator', '')} {c.get('val', '')}"
+                                for c in conditions
+                            )
+                            if conditions
+                            else str(col.get("attrs", ""))
+                        )
+                        lines.append(
+                            f"- `{ref}` — column {col_id}: {col_type} {cond_str}"
+                        )
                 else:
                     lines.append(f"- `{ref}`")
             lines.append("")

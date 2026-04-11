@@ -206,13 +206,10 @@ def _parse_workbook(data: bytes) -> Tuple[List[Tuple[str, str]], Dict[str, str]]
                 if _ns(sheet_el.tag) == "sheet":
                     name = sheet_el.get("name", "")
                     # rId is in the r: namespace
-                    rid = (
-                        sheet_el.get(
-                            "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id",
-                            "",
-                        )
-                        or sheet_el.get("r:id", "")
-                    )
+                    rid = sheet_el.get(
+                        "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id",
+                        "",
+                    ) or sheet_el.get("r:id", "")
                     if name and rid:
                         sheets.append((name, rid))
         elif tag == "definedNames":
@@ -645,7 +642,7 @@ class XlsxWorkbook:
         self._zf = zipfile.ZipFile(str(path), "r")
         self._sst: List[str] = []
         self._sheets: List[Tuple[str, str]] = []  # [(name, rId), ...]
-        self._paths: Dict[str, str] = {}           # rId -> "xl/worksheets/sheetN.xml"
+        self._paths: Dict[str, str] = {}  # rId -> "xl/worksheets/sheetN.xml"
         self._defined_names: Dict[str, str] = {}
         self._init_workbook()
         self._init_sst()
@@ -839,7 +836,7 @@ class XlsxWorkbook:
         from xlsb_reader._vba_reader import read_vba_modules
 
         try:
-            vba_bin = self._read_part('xl/vbaProject.bin')
+            vba_bin = self._read_part("xl/vbaProject.bin")
         except (KeyError, FileNotFoundError):
             return {}
 

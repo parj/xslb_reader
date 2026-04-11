@@ -3,6 +3,7 @@ from xlsb_reader import XlsbWorkbook, XlsxWorkbook
 from xlsb_reader._vba_reader import _decompress
 import sys
 import os
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from create_test_xlsm import _compress
 from pathlib import Path
@@ -48,8 +49,12 @@ def test_value_extraction(workbook):
     assert function_inventory[(94, 0)] == "PROPER"  # A95
 
     assert pivot_sheet[(13, 0)] == "Row Labels"  # A14
-    assert pivot_sheet[(20, 4)] == 27.0  # E21 — Grand Total (6 categories × 3 currencies)
-    assert pivot_sheet[(27, 1)] == pytest.approx(59719.2104, rel=1e-9)  # B28 Finance NetGBP
+    assert (
+        pivot_sheet[(20, 4)] == 27.0
+    )  # E21 — Grand Total (6 categories × 3 currencies)
+    assert pivot_sheet[(27, 1)] == pytest.approx(
+        59719.2104, rel=1e-9
+    )  # B28 Finance NetGBP
     assert pivot_sheet[(44, 1)] == 169.0  # B45 — Grand Total count of TxnID
 
 
@@ -96,7 +101,10 @@ def xlsx_workbook():
 
 def test_xlsx_sheet_names(xlsx_workbook):
     assert xlsx_workbook.sheet_names == [
-        "Ledger", "Function_Lab", "Function_Inventory", "Pivot_Tables"
+        "Ledger",
+        "Function_Lab",
+        "Function_Inventory",
+        "Pivot_Tables",
     ]
 
 
@@ -106,14 +114,14 @@ def test_xlsx_formulas(xlsx_workbook):
     fl = formulas_by_sheet["Function_Lab"]
 
     # Anchor shared formulas in Ledger
-    assert ledger[(1, 10)] == "=MAX(J2,0)"   # K2
+    assert ledger[(1, 10)] == "=MAX(J2,0)"  # K2
     assert ledger[(1, 11)] == "=ABS(MIN(J2,0))"  # L2
-    assert ledger[(1, 12)] == "=J2*I2"        # M2
+    assert ledger[(1, 12)] == "=J2*I2"  # M2
 
     # Function_Lab has 100 unique formulas
     assert len(fl) == 100
     # UDF prefix stripped
-    assert fl[(18, 2)] == "=ACOT(1)"          # C19 — was _xludf.ACOT
+    assert fl[(18, 2)] == "=ACOT(1)"  # C19 — was _xludf.ACOT
     # Cross-sheet reference preserved
     assert fl[(31, 2)] == '=AVERAGEIFS(Ledger!J186:J241,Ledger!J186:J241,">100")'
 
@@ -123,12 +131,12 @@ def test_xlsx_shared_formula_expansion(xlsx_workbook):
     ledger = formulas_by_sheet["Ledger"]
 
     # Row shifted by 1 relative to anchor K2/L2
-    assert ledger[(2, 10)] == "=MAX(J3,0)"       # K3
+    assert ledger[(2, 10)] == "=MAX(J3,0)"  # K3
     assert ledger[(2, 11)] == "=ABS(MIN(J3,0))"  # L3
-    assert ledger[(2, 12)] == "=J3*I3"            # M3
+    assert ledger[(2, 12)] == "=J3*I3"  # M3
 
     # Mid-range rows also shift correctly
-    assert ledger[(5, 10)] == "=MAX(J6,0)"        # K6
+    assert ledger[(5, 10)] == "=MAX(J6,0)"  # K6
 
 
 def test_xlsx_values(xlsx_workbook):
@@ -140,7 +148,7 @@ def test_xlsx_values(xlsx_workbook):
     assert ledger[(1, 9)] == pytest.approx(-455.88)  # J2
 
     # Function_Inventory text values
-    assert fi[(5, 0)] == "ABS"    # A6
+    assert fi[(5, 0)] == "ABS"  # A6
 
 
 def test_xlsx_pivot_tables(xlsx_workbook):
@@ -189,13 +197,14 @@ def test_xlsx_filters(xlsx_workbook):
 # VBA reader unit tests
 # ---------------------------------------------------------------------------
 
+
 def test_ovba_compress_decompress_roundtrip():
     """Compress then decompress must return original bytes."""
     for original in [
         b"Hello, World!",
         b"Sub Foo()\n    MsgBox 42\nEnd Sub\n",
         b"\x00" * 200,
-        b"abc" * 500,   # repetitive → exercises back-refs on decompression side
+        b"abc" * 500,  # repetitive → exercises back-refs on decompression side
         b"",
     ]:
         compressed = _compress(original)
@@ -225,24 +234,39 @@ def xlsm_workbook():
 def test_xlsm_vba_modules_found(xlsm_workbook):
     mods = xlsm_workbook.iter_vba_modules()
     print(set(mods.keys()))
-    assert set(mods.keys()) == {"ThisWorkbook", "Sheet1", "Sheet2", "Sheet3", "Sheet4", "Sheet5", "modComplex", "modLog", "modMain", "modMedium", "modSimple"}
+    assert set(mods.keys()) == {
+        "ThisWorkbook",
+        "Sheet1",
+        "Sheet2",
+        "Sheet3",
+        "Sheet4",
+        "Sheet5",
+        "modComplex",
+        "modLog",
+        "modMain",
+        "modMedium",
+        "modSimple",
+    }
 
 
 def test_xlsm_vba_modLog_content(xlsm_workbook):
     mods = xlsm_workbook.iter_vba_modules()
     src1 = mods["modLog"]
 
-    assert 'Public Sub LogEvent(ByVal source As String, ByVal action As String, ByVal details As String)' in src1
-    assert 'Dim ws As Worksheet' in src1
-    assert 'nr = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row + 1' in src1
+    assert (
+        "Public Sub LogEvent(ByVal source As String, ByVal action As String, ByVal details As String)"
+        in src1
+    )
+    assert "Dim ws As Worksheet" in src1
+    assert "nr = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row + 1" in src1
 
 
 def test_xlsm_vba_main_module_content(xlsm_workbook):
     mods = xlsm_workbook.iter_vba_modules()
     src2 = mods["modMain"]
-    assert 'Application.ScreenUpdating = False' in src2
-    assert 'Application.Calculation = xlCalculationManual' in src2
-    assert 'modMedium.RunDataQuality' in src2
+    assert "Application.ScreenUpdating = False" in src2
+    assert "Application.Calculation = xlCalculationManual" in src2
+    assert "modMedium.RunDataQuality" in src2
 
 
 def test_xlsm_vba_no_modules_on_plain_xlsx(xlsx_workbook):
@@ -270,7 +294,11 @@ def finance_xlsm():
 
 def test_finance_xlsm_sheet_names(finance_xlsm):
     assert finance_xlsm.sheet_names == [
-        "Ledger", "Function_Lab", "Function_Inventory", "Pivot_Tables", "Month_End_Pack"
+        "Ledger",
+        "Function_Lab",
+        "Function_Inventory",
+        "Pivot_Tables",
+        "Month_End_Pack",
     ]
 
 
@@ -285,10 +313,11 @@ def test_finance_xlsm_vba_workbook_event(finance_xlsm):
     assert "Application.EnableEvents = False" in src
     assert "modMain.Main" in src
 
+
 def test_finance_xlsm_formulas_preserved(finance_xlsm):
     """Formulas in the xlsm should match the xlsx/xlsb counterparts."""
     formulas_by_sheet = {s: f for s, f in finance_xlsm.iter_formulas()}
     fl = formulas_by_sheet["Function_Lab"]
     assert len(fl) == 100
-    assert fl[(18, 2)] == "=ACOT(1)"   # C19 — UDF prefix stripped
+    assert fl[(18, 2)] == "=ACOT(1)"  # C19 — UDF prefix stripped
     assert fl[(31, 2)] == '=AVERAGEIFS(Ledger!J186:J241,Ledger!J186:J241,">100")'
