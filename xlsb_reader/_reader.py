@@ -2018,8 +2018,8 @@ class XlsbWorkbook:
                     if cache_def not in cache_fields_by_part:
                         try:
                             cache_data = self._read_part(cache_def)
-                            cache_fields_by_part[cache_def] = (
-                                _parse_pivot_cache_fields(cache_data)
+                            cache_fields_by_part[cache_def] = _parse_pivot_cache_fields(
+                                cache_data
                             )
                         except FileNotFoundError:
                             cache_fields_by_part[cache_def] = []

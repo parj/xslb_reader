@@ -505,7 +505,9 @@ def normalize_filters(
                     }
                 )
             else:
-                columns_out.append({"index": idx, "name": name, "type": ctype or "unknown"})
+                columns_out.append(
+                    {"index": idx, "name": name, "type": ctype or "unknown"}
+                )
 
         out.append({"sheet": sheet, "range": rng, "columns": columns_out})
     return out
@@ -565,7 +567,8 @@ def render_hints(
                 else:
                     val = f.get("value")
                     parts.append(
-                        f"{label} {f.get('operator')}" + (f" {val}" if val is not None else "")
+                        f"{label} {f.get('operator')}"
+                        + (f" {val}" if val is not None else "")
                     )
             f_desc = " filters " + "; ".join(parts)
         lines.append(

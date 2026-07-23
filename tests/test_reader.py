@@ -81,7 +81,11 @@ def test_pivot_extraction(workbook):
     assert p3["location"]["rfx_geom"]["top_left"] == "A37"
     assert p3["location"]["rfx_geom"]["bottom_right"] == "B45"
     assert p3["sx_filters"] == [
-        {"field_index": 2, "filter_type": 20, "criteria": [{"operator": ">", "value": 20.0}]}
+        {
+            "field_index": 2,
+            "filter_type": 20,
+            "criteria": [{"operator": ">", "value": 20.0}],
+        }
     ]
 
     # Cache field names + shared items are resolved from the binary
