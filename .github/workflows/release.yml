@@ -11,10 +11,19 @@ permissions:
   id-token: write
 
 jobs:
+  # Detects the `bump: ...` keyword, computes the next version, bumps it in
+  # BOTH the pure-Python package (pyproject.toml / __init__.py) and the Rust
+  # companion crate (rust/pyproject.toml / rust/Cargo.toml) so the two dists
+  # stay in lockstep, commits+tags, and creates the GitHub release. Building
+  # and publishing wheels is delegated to the jobs below so we can fan out
+  # across platforms.
   release:
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
-    environment: pypi
+    outputs:
+      triggered: ${{ steps.bump.outputs.triggered }}
+      next: ${{ steps.version.outputs.next }}
+      is_prerelease: ${{ steps.version.outputs.is_prerelease }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -68,12 +77,21 @@ jobs:
           echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
           echo "Next version: $NEXT"
 
-      - name: Update version in pyproject.toml and __init__.py
+      - name: Update version in both dists (xlsb_reader + xlsb_reader_rs)
         if: steps.bump.outputs.triggered == 'true'
         run: |
           NEXT="${{ steps.version.outputs.next }}"
+
+          # Pure-Python package
           sed -i "s/^version = \".*\"/version = \"$NEXT\"/" pyproject.toml
           sed -i "s/^__version__ = \".*\"/__version__ = \"$NEXT\"/" xlsb_reader/__init__.py
+          # Keep the `fast` extra's pin on xlsb_reader_rs in lockstep too.
+          sed -i "s/xlsb_reader_rs==[0-9A-Za-z.]*/xlsb_reader_rs==$NEXT/" pyproject.toml
+
+          # Rust companion crate (bump only within the relevant table so we
+          # never touch dependency version specifiers elsewhere in the file).
+          sed -i "/^\[project\]/,/^\[/ s/^version = \".*\"/version = \"$NEXT\"/" rust/pyproject.toml
+          sed -i "/^\[package\]/,/^\[/ s/^version = \".*\"/version = \"$NEXT\"/" rust/Cargo.toml
 
       - name: Commit version bump and tag
         if: steps.bump.outputs.triggered == 'true'
@@ -81,7 +99,7 @@ jobs:
           NEXT="${{ steps.version.outputs.next }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add pyproject.toml xlsb_reader/__init__.py
+          git add pyproject.toml xlsb_reader/__init__.py rust/pyproject.toml rust/Cargo.toml
           git commit -m "chore: release v$NEXT"
           git tag -a "v$NEXT" -m "v$NEXT"
           git push origin main --follow-tags
@@ -101,12 +119,132 @@ jobs:
             --generate-notes \
             $PRERELEASE_FLAG
 
-      - name: Build package
-        if: steps.bump.outputs.triggered == 'true'
+  # sdist + universal wheel for the pure-Python `xlsb_reader` package.
+  build-python:
+    needs: release
+    if: needs.release.outputs.triggered == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.release.outputs.next }}
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build xlsb_reader sdist + wheel
         run: uv build
 
-      - name: Publish to PyPI
-        if: steps.bump.outputs.triggered == 'true'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-xlsb_reader
+          path: dist/*
+
+  # Platform wheels for the `xlsb_reader_rs` companion extension. abi3
+  # (py311+) means exactly one wheel per platform/arch covers all supported
+  # interpreters.
+  build-rust-wheels:
+    needs: release
+    if: needs.release.outputs.triggered == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            manylinux: auto
+            artifact_name: linux-x86_64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            manylinux: auto
+            artifact_name: linux-aarch64
+          # musllinux (Alpine etc.) — cheap to add alongside the manylinux
+          # x86_64 build using the same action, so included for coverage.
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            manylinux: musllinux_1_2
+            artifact_name: linux-musllinux-x86_64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: macos-x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: macos-aarch64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: windows-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.release.outputs.next }}
+
+      # Needed for maturin-action to cross-build the aarch64 manylinux wheel
+      # under emulation on the x86_64 Linux runner. No-op on macOS/Windows.
+      - name: Set up QEMU (Linux cross-arch only)
+        if: runner.os == 'Linux'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build xlsb_reader_rs wheel (${{ matrix.target }})
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: rust
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux || 'auto' }}
+          args: --release --out dist --features pyo3/abi3-py311
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-xlsb_reader_rs-${{ matrix.artifact_name }}
+          path: rust/dist/*.whl
+
+  # sdist for `xlsb_reader_rs` (built once, on Linux).
+  build-rust-sdist:
+    needs: release
+    if: needs.release.outputs.triggered == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.release.outputs.next }}
+
+      - name: Build xlsb_reader_rs sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: rust
+          command: sdist
+          args: --out dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-xlsb_reader_rs-sdist
+          path: rust/dist/*.tar.gz
+
+  # Publish BOTH dists (xlsb_reader + xlsb_reader_rs) to PyPI via trusted
+  # publishing. Requires a trusted publisher configured on PyPI for each
+  # project (xlsb_reader and xlsb_reader_rs) pointing at this workflow file
+  # + the `pypi` environment.
+  publish:
+    needs: [release, build-python, build-rust-wheels, build-rust-sdist]
+    if: needs.release.outputs.triggered == 'true'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Download all built distributions
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: "dist-*"
+          merge-multiple: true
+
+      - name: List distributions to publish
+        run: ls -la dist
+
+      - name: Publish to PyPI (xlsb_reader + xlsb_reader_rs)
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
+          packages-dir: dist
           verbose: true
