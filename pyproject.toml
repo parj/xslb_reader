@@ -11,9 +11,12 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
 ]
+dependencies = [
+]
 
 [project.scripts]
 xlsb_reader = "xlsb_reader._cli:main"
+xlsb-extract-spec = "xlsb_reader._spec_extractor:main"
 
 [build-system]
 requires = ["hatchling"]

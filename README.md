@@ -20,6 +20,7 @@ Supports reading:
 - Pivot tables
 - Filters (worksheet AutoFilter and PivotTable value filters)
 - VBA module source code (`.xlsm` / `.xlsb` files with embedded VBA)
+- A token-efficient structural spec for LLM code generation via `extract_spec.py` — see [below](#extract_specpy--llm-spec-extraction)
 
 ---
 
@@ -31,7 +32,8 @@ xlsb_reader/
 ├── _reader.py           # XlsbWorkbook — .xlsb binary format parser
 ├── _xlsx_reader.py      # XlsxWorkbook — .xlsx / .xlsm Open XML parser
 ├── _vba_reader.py       # read_vba_modules(cfb_data) — OLE/OVBA extractor
-└── _cli.py              # CLI entry point (xlsb_reader command)
+├── _cli.py              # CLI entry point (xlsb_reader command)
+└── _spec_extractor.py   # CLI entry point (xlsb-extract-spec command) — see below
 ```
 
 Both `XlsbWorkbook` and `XlsxWorkbook` expose the **same public API**:
@@ -121,6 +123,125 @@ xlsb_reader workbook.xlsx --include pivots --format json
 xlsb_reader workbook.xlsm --include vba --format markdown
 xlsb_reader workbook.xlsb --include vba --format json
 ```
+
+---
+
+## `extract_spec.py` — LLM Spec Extraction
+
+`extract_spec.py` is a tool built on top of `xlsb_reader` (uses only `argparse` from the stdlib — no
+`click`, no third-party CLI framework, consistent with this project having no dependencies beyond
+`xlsb_reader` itself). It turns a workbook — even a 60MB+ one — into a single compact `.spec` text file
+describing its **structure**, not its data: column schemas, deduplicated formula patterns, pivot/filter
+definitions, VBA source, and a small row sample. The goal is to hand that `.spec` file to an LLM (Claude
+Code, ChatGPT, etc.) instead of the raw workbook, so it can write equivalent pandas/polars/openpyxl code
+without needing to ingest hundreds of thousands of data rows or burn its context window on near-duplicate
+formulas.
+
+### Option A: `pip install` (a command available anywhere)
+
+```bash
+pip install xlsb_reader
+xlsb-extract-spec workbook.xlsx
+xlsb-extract-spec workbook.xlsb --sample-rows 10
+xlsb-extract-spec workbook.xlsm --sheets Ledger,Summary --output workbook_ledger.spec
+```
+
+`xlsb-extract-spec` is registered as a `[project.scripts]` entry point (see `pyproject.toml`), the same
+way the `xlsb_reader` command itself is — so once installed it's on your `PATH`, independent of the
+current directory.
+
+### Option B: run the script directly from a repo clone
+
+```bash
+git clone <this-repo>
+cd xlsb_reader
+python extract_spec.py workbook.xlsx
+```
+
+`extract_spec.py` at the repo root is a thin wrapper around `xlsb_reader/_spec_extractor.py` (the actual
+implementation) — it exists so the tool works without installing anything, straight out of a clone. Both
+options run identical code and accept identical flags.
+
+### CLI flags
+
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `input_file` | — | Path to `.xlsx`, `.xlsb`, or `.xlsm` |
+| `--output` | `<input>.spec` | Output path for the spec file |
+| `--sample-rows` | `50` | Rows of real data to include per sheet; `0` to omit sample data entirely |
+| `--sheets` | `all` | `all` or a comma-separated list of sheet names to include |
+| `--validate` | off | Re-reads `--output` (or the default `.spec` path) and checks it against `input_file` instead of generating a new spec — see below |
+
+### What's in a `.spec` file
+
+Sections, in order, separated by `---`:
+
+1. `workbook:` header — file name, format, sheet list, extraction timestamp.
+2. Per-sheet `columns[N]{...}` TOON table — inferred type, nullability, up to 5 sample values, and
+   notes (e.g. `primary key candidate`, `3 distinct values seen`) for every column.
+3. A fenced `json:formulas` block — formulas deduplicated by **pattern**, not by cell. `=MAX(J2,0)`
+   repeated over 240 rows collapses to one entry with `row_count: 240`, instead of 240 near-identical
+   lines.
+4. A fenced `json:dependencies` block — which sheets' formulas reference which other sheets.
+5. Fenced `json:pivots` and `json:filters` blocks — pivot table and AutoFilter definitions, normalized to
+   one shape regardless of whether the source file was `.xlsb` or `.xlsx`/`.xlsm` (the underlying library
+   returns different dict shapes for each).
+6. Fenced `vba:ModuleName` blocks — full VBA source, if the workbook has any.
+7. Per-sheet `rows[N]{...}` TOON table — the actual `--sample-rows` data sample.
+8. `[hints]` — a short, LLM-facing summary: primary table, key transformations with a vectorisation
+   suggestion (`pd.merge`/dict map for lookups, otherwise vectorisable), sheet dependencies, and how to
+   reproduce each pivot/filter.
+
+Example (trimmed, from a real ledger workbook):
+
+````
+sheet: Ledger
+dimensions: 241 rows x 13 cols
+columns[13]{name,inferred_type,nullable,sample_values,notes}:
+  TxnID,string,false,"TX-400000,TX-400001,TX-400002,TX-400003,TX-400004",primary key candidate
+  Amount,float,false,"-455.88,6087.62,-1697.91,544.35,-11652.88",
+  NetGBP,float,false,"-455.88,4809.2198,-1697.91,544.35,-11652.88",
+---
+```json:formulas
+{"Ledger":{"col_K":{"pattern":"=MAX(<Amount>,0)","example_cell":"K2","example_formula":"=MAX(J2,0)","row_count":240},
+           "col_M":{"pattern":"=<Amount>*<FXRate>","example_cell":"M2","example_formula":"=J2*I2","row_count":240}}}
+```
+---
+[hints]
+- Primary table: Ledger (241 rows, grain = one row per record)
+- Key transformation: Ledger.Debit = =MAX(<Amount>,0) (vectorisable)
+- Key transformation: Ledger.NetGBP = =<Amount>*<FXRate> (vectorisable)
+````
+
+### Using it with Claude Code (or other coding agents)
+
+1. Generate the spec once, before starting the coding session (`xlsb-extract-spec` if installed via pip,
+   or `python extract_spec.py` from a clone):
+   ```bash
+   xlsb-extract-spec workbook.xlsx --sample-rows 20
+   ```
+2. Point the agent at the `.spec` file instead of the workbook, e.g.:
+   ```
+   Read workbook.spec and write a pandas script that reproduces the Ledger sheet's
+   Debit/Credit/NetGBP columns and the pivot tables on Pivot_Tables.
+   ```
+   Since the spec has no bulk data (only the small explicit sample), it's both far smaller than the
+   workbook and avoids putting row-level data in the model's context beyond what you asked for.
+3. After the agent writes code against the spec, sanity-check the spec itself matches the workbook with:
+   ```bash
+   xlsb-extract-spec workbook.xlsx --validate
+   ```
+   This checks that every sheet name and every `<ColumnName>` token used in the `formulas` JSON block
+   actually resolves against the live workbook — useful after hand-editing a spec, or after the source
+   workbook changes.
+
+### Known limitations
+
+- Column headers are only detected from **row 0**. Sheets with multi-row headers (a title row above the
+  real header row) will fall back to `col_A`, `col_B`, ... for columns with no row-0 value.
+- Dates stored as Excel serial numbers (the common case) are typed `integer`/`float` per the stated type
+  rules, with a `possible Excel serial date` note when the header name contains "date" — they are not
+  auto-converted to a `date` type.
 
 ---
 
