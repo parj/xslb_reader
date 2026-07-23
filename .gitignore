@@ -11,3 +11,4 @@ xslb-file-format.md
 *.spec
 .venv*/
 /rust/target/
+.claude/worktrees/
