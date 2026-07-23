@@ -11,13 +11,16 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
 ]
+dependencies = [
+]
 
 [project.scripts]
 xlsb_reader = "xlsb_reader._cli:main"
+xlsb-extract-spec = "xlsb_reader._spec_extractor:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
-dev = ["pytest", "ruff", "ty", "pip-audit"]
+dev = ["pytest", "ruff", "pip-audit"]
