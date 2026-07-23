@@ -14,6 +14,14 @@ classifiers = [
 dependencies = [
 ]
 
+[project.optional-dependencies]
+fast = ["xlsb_reader_rs==1.0.0rc1"]
+
+# For local development the native accelerator is built from the in-repo `rust/`
+# crate. On PyPI, `xlsb_reader[fast]` resolves `xlsb_reader_rs` from the registry.
+[tool.uv.sources]
+xlsb_reader_rs = { path = "rust", editable = true }
+
 [project.scripts]
 xlsb_reader = "xlsb_reader._cli:main"
 xlsb-extract-spec = "xlsb_reader._spec_extractor:main"
