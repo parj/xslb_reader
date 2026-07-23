@@ -338,18 +338,61 @@ def normalize_pivots(wb, sheet_selected) -> List[Dict[str, Any]]:
             if tl and br:
                 location_str = f"{tl}:{br}"
 
-        filters = []
+        cache_fields = pt.get("cache_fields") or []
+
+        def field_name(idx: Optional[int]) -> Optional[str]:
+            if idx is None or not (0 <= idx < len(cache_fields)):
+                return None
+            return cache_fields[idx].get("name")
+
+        def field_value(idx: Optional[int], item_idx: Optional[int]) -> Any:
+            if idx is None or item_idx is None or not (0 <= idx < len(cache_fields)):
+                return None
+            items = cache_fields[idx].get("shared_items") or []
+            if 0 <= item_idx < len(items):
+                return items[item_idx]
+            return None
+
+        filters: List[Dict[str, Any]] = []
         for sf in pt.get("sx_filters") or []:
             for crit in sf.get("criteria") or []:
+                fidx = sf.get("field_index")
                 filters.append(
                     {
-                        "field_index": sf.get("field_index"),
+                        "kind": "value_filter",
+                        "field_index": fidx,
+                        "field_name": field_name(fidx),
                         "operator": crit.get("operator"),
                         "value": crit.get("value"),
                     }
                 )
         for rf in pt.get("report_filters") or []:
-            filters.append({"field_index": rf.get("fld"), "operator": rf.get("type")})
+            fidx = rf.get("fld")
+            filters.append(
+                {
+                    "kind": "value_filter",
+                    "field_index": fidx,
+                    "field_name": field_name(fidx),
+                    "operator": rf.get("operator", rf.get("type")),
+                    "value": rf.get("value"),
+                }
+            )
+        # Manual filters: items unchecked in a pivot field's dropdown.
+        for ff in pt.get("field_filters") or []:
+            fidx = ff.get("field_index")
+            excluded = [
+                v
+                for idx in ff.get("hidden_indices") or []
+                if (v := field_value(fidx, idx)) is not None
+            ]
+            filters.append(
+                {
+                    "kind": "item_filter",
+                    "field_index": fidx,
+                    "field_name": field_name(fidx),
+                    "excluded_values": excluded,
+                }
+            )
 
         entry: Dict[str, Any] = {
             "name": pt.get("name"),
@@ -370,7 +413,9 @@ def normalize_pivots(wb, sheet_selected) -> List[Dict[str, Any]]:
     return out
 
 
-def normalize_filters(wb, sheet_selected) -> List[Dict[str, Any]]:
+def normalize_filters(
+    wb, sheet_selected, header_maps: Dict[str, Dict[int, str]]
+) -> List[Dict[str, Any]]:
     out = []
     if not hasattr(wb, "iter_filters"):
         return out
@@ -386,14 +431,25 @@ def normalize_filters(wb, sheet_selected) -> List[Dict[str, Any]]:
             continue
 
         rng = None
+        range_start_col = 0
         if isinstance(info.get("range"), dict):
-            rng = f"{info['range'].get('top_left')}:{info['range'].get('bottom_right')}"
+            top_left = info["range"].get("top_left") or ""
+            rng = f"{top_left}:{info['range'].get('bottom_right')}"
         elif info.get("ref"):
             rng = info["ref"]
+            top_left = rng.split(":")[0]
+        else:
+            top_left = ""
+        m = re.match(r"[A-Z]+", top_left)
+        if m:
+            range_start_col = letters_to_col(m.group())
+
+        sheet_headers = header_maps.get(sheet, {})
 
         columns_out = []
         for col in info.get("columns", []):
             idx = col.get("column_index", col.get("col_id"))
+            name = sheet_headers.get(range_start_col + idx) if idx is not None else None
             ctype = col.get("type")
             custom = col.get("custom_filters")
             if custom:
@@ -402,6 +458,7 @@ def normalize_filters(wb, sheet_selected) -> List[Dict[str, Any]]:
                 for crit in crits:
                     entry = {
                         "index": idx,
+                        "name": name,
                         "type": "custom",
                         "operator": crit.get("operator"),
                         "value": crit.get("value"),
@@ -414,6 +471,7 @@ def normalize_filters(wb, sheet_selected) -> List[Dict[str, Any]]:
                     columns_out.append(
                         {
                             "index": idx,
+                            "name": name,
                             "type": ctype or "custom",
                             "operator": crit.get("operator"),
                             "value": crit.get("val"),
@@ -421,18 +479,35 @@ def normalize_filters(wb, sheet_selected) -> List[Dict[str, Any]]:
                     )
             elif col.get("filters"):
                 columns_out.append(
-                    {"index": idx, "type": "discrete", "values": col["filters"]}
+                    {
+                        "index": idx,
+                        "name": name,
+                        "type": "discrete",
+                        "values": col["filters"],
+                    }
                 )
             elif col.get("values"):
                 columns_out.append(
-                    {"index": idx, "type": ctype or "discrete", "values": col["values"]}
+                    {
+                        "index": idx,
+                        "name": name,
+                        "type": ctype or "discrete",
+                        "values": col["values"],
+                    }
                 )
             elif col.get("attrs"):
                 columns_out.append(
-                    {"index": idx, "type": ctype or "unknown", "attrs": col["attrs"]}
+                    {
+                        "index": idx,
+                        "name": name,
+                        "type": ctype or "unknown",
+                        "attrs": col["attrs"],
+                    }
                 )
             else:
-                columns_out.append({"index": idx, "type": ctype or "unknown"})
+                columns_out.append(
+                    {"index": idx, "name": name, "type": ctype or "unknown"}
+                )
 
         out.append({"sheet": sheet, "range": rng, "columns": columns_out})
     return out
@@ -486,11 +561,15 @@ def render_hints(
         if pt.get("filters"):
             parts = []
             for f in pt["filters"]:
-                val = f.get("value")
-                parts.append(
-                    f"field {f.get('field_index')} {f.get('operator')}"
-                    + (f" {val}" if val is not None else "")
-                )
+                label = f.get("field_name") or f"field {f.get('field_index')}"
+                if f.get("kind") == "item_filter":
+                    parts.append(f"{label} excludes {f.get('excluded_values')}")
+                else:
+                    val = f.get("value")
+                    parts.append(
+                        f"{label} {f.get('operator')}"
+                        + (f" {val}" if val is not None else "")
+                    )
             f_desc = " filters " + "; ".join(parts)
         lines.append(
             f"- Pivot: {pt.get('name')} on {pt.get('sheet')}{f_desc} -> implement via pandas pivot_table()/groupby()"
@@ -499,8 +578,9 @@ def render_hints(
     for f in filters:
         for col in f.get("columns", []):
             val = col.get("value", col.get("values", ""))
+            label = col.get("name") or f"col {col.get('index')}"
             lines.append(
-                f"- AutoFilter on {f['sheet']} col {col.get('index')} {col.get('operator', '')} {val} "
+                f"- AutoFilter on {f['sheet']}.{label} {col.get('operator', '')} {val} "
                 "-> document as input filter parameter"
             )
 
@@ -583,7 +663,7 @@ def build_spec(input_path: pathlib.Path, sample_rows: int, sheets_arg: str) -> s
             wb, header_maps, sheet_selected
         )
         pivots = normalize_pivots(wb, sheet_selected)
-        filters = normalize_filters(wb, sheet_selected)
+        filters = normalize_filters(wb, sheet_selected, header_maps)
 
         vba_modules: Dict[str, str] = {}
         if hasattr(wb, "iter_vba_modules"):

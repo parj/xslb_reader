@@ -171,6 +171,10 @@ BRT_END_SX_FILTERS = 0x0258  # 600
 BRT_BEGIN_SX_FILTER = 0x0259  # 601
 BRT_END_SX_FILTER = 0x025A  # 602
 BRT_SX_FILTER15 = 0x081F  # 2079
+# PivotCache definition records (field names + shared items)
+BRT_BEGIN_PCDFIELD = 0x00B7  # 183  BrtBeginPCDField
+BRT_BEGIN_PCDIRUN = 0x00BF  # 191  BrtBeginPCDIRun
+BRT_PCDI_STRING = 0x0018  # 24   BrtPCDIString
 
 # ---------------------------------------------------------------------------
 # Ptg exact-byte token constants  (ptg < 0x20)
@@ -1677,8 +1681,24 @@ def _parse_pivot_table_part(data: bytes) -> Dict[str, object]:
         "pivot_fields": 0,
         "pivot_items": 0,
         "sx_filters": [],
+        "field_filters": [],
     }
     current_sx_filter: Optional[Dict[str, object]] = None
+    # Per-field manual filter tracking: items unchecked in a pivot field's
+    # dropdown are BrtBeginSXVI records with fHidden set (see MS-XLSB
+    # 2.4.277). Fields are visited in order via BrtBeginSXVD (2.4.273),
+    # matching cache-field / pivotField index order.
+    current_field_index = -1
+    current_hidden: List[int] = []
+
+    def flush_field() -> None:
+        if current_hidden:
+            meta["field_filters"].append(  # type: ignore[attr-defined]
+                {
+                    "field_index": current_field_index,
+                    "hidden_indices": list(current_hidden),
+                }
+            )
 
     for rec_type, payload in RecordReader(data):
         if rec_type == BRT_BEGIN_SX_VIEW and len(payload) >= 32:
@@ -1713,9 +1733,20 @@ def _parse_pivot_table_part(data: bytes) -> Dict[str, object]:
             }
 
         elif rec_type == BRT_BEGIN_SXVD:
+            flush_field()
+            current_field_index += 1
+            current_hidden = []
             meta["pivot_fields"] = int(meta["pivot_fields"]) + 1
         elif rec_type == BRT_BEGIN_SXVI:
             meta["pivot_items"] = int(meta["pivot_items"]) + 1
+            if len(payload) >= 7:
+                itmtype = payload[0]
+                grbit = struct.unpack_from("<H", payload, 1)[0]
+                icache = struct.unpack_from("<i", payload, 3)[0]
+                # fHidden is bit 0 of grbit; only meaningful for itmtype
+                # PITDATA (0), where iCache is a real cache-item index.
+                if itmtype == 0 and (grbit & 0x0001) and icache >= 0:
+                    current_hidden.append(icache)
 
         elif rec_type == BRT_BEGIN_SX_FILTER and len(payload) >= 12:
             # BrtBeginSXFILTER: iField(i32) iMeasureFld(i32) sxft(i32) ...
@@ -1736,7 +1767,51 @@ def _parse_pivot_table_part(data: bytes) -> Dict[str, object]:
                 meta["sx_filters"].append(current_sx_filter)  # type: ignore[attr-defined]
                 current_sx_filter = None
 
+    flush_field()
     return meta
+
+
+def _parse_pivot_cache_fields(data: bytes) -> List[Dict[str, object]]:
+    """
+    Parse a pivotCacheDefinitionN.bin part and return, in cache-field order
+    (which matches pivotField order), a list of:
+        {"name": str, "shared_items": [str | float, ...]}
+    ``shared_items`` is indexed the same way as the iCache field referenced
+    by BrtBeginSXVI (section 2.4.277) records.
+    """
+    fields: List[Dict[str, object]] = []
+
+    for rec_type, payload in RecordReader(data):
+        if rec_type == BRT_BEGIN_PCDFIELD:
+            name = ""
+            if len(payload) >= 20:
+                buf = io.BytesIO(payload)
+                buf.seek(20)
+                name = _read_xlwide_from(buf)
+            fields.append({"name": name, "shared_items": []})
+
+        elif rec_type == BRT_BEGIN_PCDIRUN and fields and len(payload) >= 6:
+            md_sxoper = struct.unpack_from("<H", payload, 0)[0]
+            citems = struct.unpack_from("<I", payload, 2)[0]
+            buf = io.BytesIO(payload)
+            buf.seek(6)
+            items: List[object] = []
+            if md_sxoper == 0x0002:  # rgPCDIString
+                for _ in range(citems):
+                    items.append(_read_xlwide_from(buf))
+            elif md_sxoper == 0x0001:  # rgPCDINumber (Xnum = 8-byte double)
+                for _ in range(citems):
+                    chunk = buf.read(8)
+                    if len(chunk) < 8:
+                        break
+                    items.append(struct.unpack("<d", chunk)[0])
+            fields[-1]["shared_items"].extend(items)  # type: ignore[attr-defined]
+
+        elif rec_type == BRT_PCDI_STRING and fields:
+            buf = io.BytesIO(payload)
+            fields[-1]["shared_items"].append(_read_xlwide_from(buf))  # type: ignore[attr-defined]
+
+    return fields
 
 
 # ---------------------------------------------------------------------------
@@ -1900,6 +1975,7 @@ class XlsbWorkbook:
 
         # Discover pivot table parts through worksheet relationships.
         seen_parts: set[str] = set()
+        cache_fields_by_part: Dict[str, List[Dict[str, object]]] = {}
         for sheet_path, sheet_name in sheet_by_path.items():
             rel_path = (
                 f"{os.path.dirname(sheet_path)}/_rels/{os.path.basename(sheet_path)}.rels"
@@ -1939,6 +2015,15 @@ class XlsbWorkbook:
                         break
                 if cache_def:
                     meta["pivot_cache_definition"] = cache_def
+                    if cache_def not in cache_fields_by_part:
+                        try:
+                            cache_data = self._read_part(cache_def)
+                            cache_fields_by_part[cache_def] = _parse_pivot_cache_fields(
+                                cache_data
+                            )
+                        except FileNotFoundError:
+                            cache_fields_by_part[cache_def] = []
+                    meta["cache_fields"] = cache_fields_by_part[cache_def]
                 yield meta
 
     def close(self):

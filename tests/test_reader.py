@@ -80,6 +80,28 @@ def test_pivot_extraction(workbook):
     p3 = by_name["PivotTable3"]
     assert p3["location"]["rfx_geom"]["top_left"] == "A37"
     assert p3["location"]["rfx_geom"]["bottom_right"] == "B45"
+    assert p3["sx_filters"] == [
+        {
+            "field_index": 2,
+            "filter_type": 20,
+            "criteria": [{"operator": ">", "value": 20.0}],
+        }
+    ]
+
+    # Cache field names + shared items are resolved from the binary
+    # pivotCacheDefinition, indexed the same way as SXVI's iCache.
+    cache_fields = p1["cache_fields"]
+    by_field_name = {f["name"]: f for f in cache_fields}
+    assert by_field_name["Category"]["shared_items"] == [
+        "Supplies",
+        "Payroll",
+        "Marketing",
+        "Facilities",
+        "IT",
+        "Sales",
+        "Travel",
+        "Professional Services",
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +197,31 @@ def test_xlsx_pivot_tables(xlsx_workbook):
     p3 = by_name["PivotTable3"]
     assert p3["location"]["rfx_geom"]["top_left"] == "A37"
     assert p3["location"]["rfx_geom"]["bottom_right"] == "B45"
+    assert p3["report_filters"] == [
+        {
+            "fld": 2,
+            "type": "valueGreaterThan",
+            "operator": "greaterThan",
+            "value": "20",
+        }
+    ]
+
+    # PivotTable1's Category row field has Payroll and Professional Services
+    # manually unchecked in its filter dropdown (<item h="1" x="N"/>).
+    assert p1["field_filters"] == [{"field_index": 3, "hidden_indices": [1, 7]}]
+
+    cache_fields = p1["cache_fields"]
+    by_field_name = {f["name"]: f for f in cache_fields}
+    assert by_field_name["Category"]["shared_items"] == [
+        "Supplies",
+        "Payroll",
+        "Marketing",
+        "Facilities",
+        "IT",
+        "Sales",
+        "Travel",
+        "Professional Services",
+    ]
 
 
 def test_xlsx_filters(xlsx_workbook):

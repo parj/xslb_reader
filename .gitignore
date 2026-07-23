@@ -8,3 +8,4 @@ __pycache__
 xslb-file-format.md
 .pytest_cache/
 .ruff_cache/
+*.spec
