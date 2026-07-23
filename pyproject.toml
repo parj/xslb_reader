@@ -23,4 +23,4 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
-dev = ["pytest", "ruff", "ty", "pip-audit"]
+dev = ["pytest", "ruff", "pip-audit"]
