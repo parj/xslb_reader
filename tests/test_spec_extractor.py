@@ -1,9 +1,7 @@
 from pathlib import Path
 
-import pytest
 from xlsb_reader import XlsbWorkbook, XlsxWorkbook
 from xlsb_reader._spec_extractor import (
-    build_column_schema,
     detect_headers,
     normalize_filters,
     normalize_pivots,
