@@ -474,21 +474,39 @@ def _parse_pivot_table_xml(data: bytes) -> Dict[str, object]:
     else:
         meta["location"] = None
 
-    # Pivot fields
+    # Pivot fields — also capture, per field, any pivot items manually
+    # unchecked in the field's filter dropdown (<item h="1" x="N"/>).
     pf_el = root.find(_q("pivotFields"))
     pivot_fields_count = 0
     pivot_items_count = 0
+    field_filters: List[Dict[str, object]] = []
     if pf_el is not None:
         for pf in pf_el:
-            if _ns(pf.tag) == "pivotField":
-                pivot_fields_count += 1
-                items_el = pf.find(_q("items"))
-                if items_el is not None:
-                    for item in items_el:
-                        if _ns(item.tag) == "item":
-                            pivot_items_count += 1
+            if _ns(pf.tag) != "pivotField":
+                continue
+            field_index = pivot_fields_count
+            pivot_fields_count += 1
+            items_el = pf.find(_q("items"))
+            hidden_indices: List[int] = []
+            if items_el is not None:
+                for item in items_el:
+                    if _ns(item.tag) != "item":
+                        continue
+                    pivot_items_count += 1
+                    if item.get("h") == "1":
+                        x = item.get("x")
+                        if x is not None:
+                            try:
+                                hidden_indices.append(int(x))
+                            except ValueError:
+                                pass
+            if hidden_indices:
+                field_filters.append(
+                    {"field_index": field_index, "hidden_indices": hidden_indices}
+                )
     meta["pivot_fields"] = pivot_fields_count
     meta["pivot_items"] = pivot_items_count
+    meta["field_filters"] = field_filters
 
     # Row fields
     row_fields: List[int] = []
@@ -532,21 +550,74 @@ def _parse_pivot_table_xml(data: bytes) -> Dict[str, object]:
                 data_fields.append({"name": df_name, "fld": fld, "subtotal": subtotal})
     meta["data_fields"] = data_fields
 
-    # Report filters (from <filters> element inside pivot table definition)
+    # Report filters (from <filters> element inside pivot table definition).
+    # A <filter> wraps a nested <autoFilter>/<filterColumn>/<customFilters>
+    # that carries the actual threshold value (e.g. "Count of TxnID" > 20).
     report_filters: List[Dict[str, object]] = []
     filters_el = root.find(_q("filters"))
     if filters_el is not None:
         for filt_el in filters_el:
-            if _ns(filt_el.tag) == "filter":
-                try:
-                    fld_idx = int(filt_el.get("fld", "0"))
-                except ValueError:
-                    fld_idx = 0
-                filt_type = filt_el.get("type", "")
-                report_filters.append({"fld": fld_idx, "type": filt_type})
+            if _ns(filt_el.tag) != "filter":
+                continue
+            try:
+                fld_idx = int(filt_el.get("fld", "0"))
+            except ValueError:
+                fld_idx = 0
+            entry: Dict[str, object] = {"fld": fld_idx, "type": filt_el.get("type", "")}
+            custom_filter = filt_el.find(
+                f"{_q('autoFilter')}/{_q('filterColumn')}/{_q('customFilters')}/{_q('customFilter')}"
+            )
+            if custom_filter is not None:
+                entry["operator"] = custom_filter.get("operator")
+                entry["value"] = custom_filter.get("val")
+            report_filters.append(entry)
     meta["report_filters"] = report_filters
 
     return meta
+
+
+# ---------------------------------------------------------------------------
+# Pivot cache definition XML parsing (field names + shared items)
+# ---------------------------------------------------------------------------
+
+
+def _parse_pivot_cache_fields_xml(data: bytes) -> List[Dict[str, object]]:
+    """
+    Parse xl/pivotCache/pivotCacheDefinitionN.xml and return, in cache-field
+    order (which matches pivotField order), a list of:
+        {"name": str, "shared_items": [str | float | bool, ...]}
+    ``shared_items`` is indexed the same way as the <item x="N"/> references
+    used by pivotTable pivotField items.
+    """
+    try:
+        root = ET.fromstring(data)
+    except ET.ParseError:
+        return []
+
+    fields: List[Dict[str, object]] = []
+    cache_fields_el = root.find(_q("cacheFields"))
+    if cache_fields_el is None:
+        return fields
+
+    for cf in cache_fields_el:
+        if _ns(cf.tag) != "cacheField":
+            continue
+        shared_items: List[object] = []
+        si_el = cf.find(_q("sharedItems"))
+        if si_el is not None:
+            for item in si_el:
+                tag = _ns(item.tag)
+                if tag == "s":
+                    shared_items.append(item.get("v", ""))
+                elif tag == "n":
+                    try:
+                        shared_items.append(float(item.get("v", "0")))
+                    except ValueError:
+                        shared_items.append(item.get("v"))
+                elif tag == "b":
+                    shared_items.append(item.get("v") == "1")
+        fields.append({"name": cf.get("name", ""), "shared_items": shared_items})
+    return fields
 
 
 # ---------------------------------------------------------------------------
@@ -743,6 +814,7 @@ class XlsxWorkbook:
                 sheet_by_path[zpath] = sheet_name
 
         seen_parts: set = set()
+        cache_fields_by_part: Dict[str, List[Dict[str, object]]] = {}
 
         for sheet_path, sheet_name in sheet_by_path.items():
             # Build path to worksheet rels file
@@ -792,6 +864,15 @@ class XlsxWorkbook:
                         break
                 if cache_def:
                     meta["pivot_cache_definition"] = cache_def
+                    if cache_def not in cache_fields_by_part:
+                        try:
+                            cache_data = self._read_part(cache_def)
+                            cache_fields_by_part[cache_def] = (
+                                _parse_pivot_cache_fields_xml(cache_data)
+                            )
+                        except FileNotFoundError:
+                            cache_fields_by_part[cache_def] = []
+                    meta["cache_fields"] = cache_fields_by_part[cache_def]
 
                 yield meta
 
