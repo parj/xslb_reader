@@ -785,7 +785,16 @@ def main() -> None:
         ok = validate_spec(input_path, output_path)
         sys.exit(0 if ok else 1)
 
-    content = build_spec(input_path, args.sample_rows, args.sheets)
+    # Route through the package-level, backend-aware dispatcher (rather than
+    # calling build_spec() directly) so this picks up xlsb_reader_rs when it's
+    # installed/requested. Imported lazily to avoid import-time coupling with
+    # xlsb_reader/__init__.py, which itself imports from this module lazily.
+    import xlsb_reader
+
+    print(f"Using {xlsb_reader.get_backend()} backend", file=sys.stderr)
+    content = xlsb_reader.extract_spec(
+        str(input_path), sample_rows=args.sample_rows, sheets=args.sheets
+    )
     output_path.write_text(content, encoding="utf-8")
     print(f"Wrote {output_path}", file=sys.stderr)
 

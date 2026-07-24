@@ -551,7 +551,7 @@ wheels = [
 
 [[package]]
 name = "xlsb-reader"
-version = "1.0.0rc1"
+version = "2.0.0"
 source = { editable = "." }
 
 [package.optional-dependencies]
@@ -579,5 +579,5 @@ dev = [
 
 [[package]]
 name = "xlsb-reader-rs"
-version = "1.0.0rc1"
+version = "2.0.0"
 source = { editable = "rust" }
