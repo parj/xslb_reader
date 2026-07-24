@@ -264,10 +264,8 @@ fn decompress(compressed: &[u8]) -> Result<Vec<u8>> {
                                 "OVBA CopyToken: offset exceeds decompressed length".to_string(),
                             ));
                         }
-                        let mut copy_src = out.len() - offset;
-                        for _ in 0..length {
+                        for copy_src in (out.len() - offset..).take(length) {
                             out.push(out[copy_src]);
-                            copy_src += 1;
                         }
                     }
                 }

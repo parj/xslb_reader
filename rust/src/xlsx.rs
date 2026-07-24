@@ -184,13 +184,13 @@ fn parse_xml_tree(data: &[u8]) -> Option<XmlNode> {
                     }
                 }
             }
-            Ok(Event::End(_)) => match stack.pop() {
-                Some(node) => match stack.last_mut() {
+            Ok(Event::End(_)) => {
+                let node = stack.pop()?;
+                match stack.last_mut() {
                     Some(parent) => parent.children.push(node),
                     None => root = Some(node),
-                },
-                None => return None,
-            },
+                }
+            }
             Ok(_) => {}
             Err(_) => return None,
         }
