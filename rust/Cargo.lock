@@ -460,7 +460,7 @@ dependencies = [
 
 [[package]]
 name = "xlsb_reader_rs"
-version = "1.0.0-rc1"
+version = "2.0.0"
 dependencies = [
  "cfb",
  "pyo3",
