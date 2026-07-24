@@ -1,6 +1,6 @@
 [project]
 name = "xlsb_reader"
-version = "2.0.0"
+version = "2.1.0"
 description = "Pure-Python reader for Excel Binary Workbook (.xlsb) files"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-fast = ["xlsb_reader_rs==2.0.0"]
+fast = ["xlsb_reader_rs==2.1.0"]
 
 # For local development the native accelerator is built from the in-repo `rust/`
 # crate. On PyPI, `xlsb_reader[fast]` resolves `xlsb_reader_rs` from the registry.
