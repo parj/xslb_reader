@@ -33,7 +33,11 @@ xlsb_reader/
 ├── _xlsx_reader.py      # XlsxWorkbook — .xlsx / .xlsm Open XML parser
 ├── _vba_reader.py       # read_vba_modules(cfb_data) — OLE/OVBA extractor
 ├── _cli.py              # CLI entry point (xlsb_reader command)
+├── _render.py           # to_dict/to_json/to_markdown — shared by the CLI and xlsb_reader.to_*()
 └── _spec_extractor.py   # CLI entry point (xlsb-extract-spec command) — see below
+
+rust/                    # optional xlsb_reader_rs extension (pip install xlsb_reader[fast])
+└── src/                 # PyO3 port of the modules above, built with maturin
 ```
 
 Both `XlsbWorkbook` and `XlsxWorkbook` expose the **same public API**:
@@ -56,6 +60,32 @@ Both `XlsbWorkbook` and `XlsxWorkbook` expose the **same public API**:
 ```bash
 pip install xlsb_reader
 ```
+
+For very large workbooks, install the optional Rust-accelerated backend:
+
+```bash
+pip install "xlsb_reader[fast]"
+```
+
+This pulls in a companion compiled extension, `xlsb_reader_rs` (prebuilt
+wheels for Linux/macOS/Windows on amd64 and arm64), which reimplements the
+same parsing/rendering/spec-extraction logic in Rust for large-file
+performance. `xlsb_reader` auto-detects it at import time and uses it
+transparently — no code changes needed. Everything below (`XlsbWorkbook`,
+`XlsxWorkbook`, the CLI, `extract_spec`) behaves identically either way;
+the two backends are verified byte-for-byte identical against each other
+in CI (`tests/test_backend_parity.py`).
+
+```python
+import xlsb_reader
+
+xlsb_reader.get_backend()  # "rust" if xlsb_reader_rs is installed, else "python"
+```
+
+Set `XLSB_READER_BACKEND=python` or `=rust` to force a specific backend
+(raises `ImportError` if `rust` is forced but `xlsb_reader_rs` isn't
+installed). Without `[fast]`, `xlsb_reader` stays pure-Python with zero
+third-party dependencies, exactly as before.
 
 ---
 
@@ -327,29 +357,29 @@ with XlsxWorkbook("workbook.xlsx") as wb:
 
 ```python
 {
-    "name": "PivotTable1",          # str | None
-    "cache_id": 1,                  # int | None — links to the pivot cache
-    "data_caption": "Values",       # str | None
-    "sheet": "Sheet1",              # str — sheet the pivot table lives on
-    "pivot_fields": 5,              # int — number of fields (columns) in the cache
-    "pivot_items": 42,              # int — total number of items across all fields
+    "name": "PivotTable1",  # str | None
+    "cache_id": 1,  # int | None — links to the pivot cache
+    "data_caption": "Values",  # str | None
+    "sheet": "Sheet1",  # str — sheet the pivot table lives on
+    "pivot_fields": 5,  # int — number of fields (columns) in the cache
+    "pivot_items": 42,  # int — total number of items across all fields
     "location": {
         "rfx_geom": {
-            "top_left": "A3",       # str — first cell of the pivot table body
+            "top_left": "A3",  # str — first cell of the pivot table body
             "bottom_right": "D20",  # str — last cell of the pivot table body
         },
-        "rw_first_head":  3,        # int — 1-based row of the header row
-        "rw_first_data":  5,        # int — 1-based row where data rows start
-        "col_first_data": "B",      # str — column letter where data columns start
-        "page_rows":      1,        # int — number of page-filter rows
-        "page_cols":      0,        # int — number of page-filter columns
+        "rw_first_head": 3,  # int — 1-based row of the header row
+        "rw_first_data": 5,  # int — 1-based row where data rows start
+        "col_first_data": "B",  # str — column letter where data columns start
+        "page_rows": 1,  # int — number of page-filter rows
+        "page_cols": 0,  # int — number of page-filter columns
     },
-    "part": "xl/pivotTables/pivotTable1.bin",                        # str — internal zip path
+    "part": "xl/pivotTables/pivotTable1.bin",  # str — internal zip path
     "pivot_cache_definition": "xl/pivotCache/pivotCacheDefinition1.bin",  # str | None
-    "sx_filters": [                     # list — PivotTable value filters (empty if none)
+    "sx_filters": [  # list — PivotTable value filters (empty if none)
         {
-            "field_index": 2,           # int — 0-based index of the filtered pivot field
-            "filter_type": 20,          # int — PivotFilterType (e.g. 20 = valueGreaterThan)
+            "field_index": 2,  # int — 0-based index of the filtered pivot field
+            "filter_type": 20,  # int — PivotFilterType (e.g. 20 = valueGreaterThan)
             "criteria": [
                 {"operator": ">", "value": 20.0},
             ],
@@ -380,19 +410,19 @@ The dict describes the AutoFilter range and the criteria applied to each filtere
 # XlsbWorkbook filter dict schema
 {
     "range": {
-        "top_left":     "A1",   # str — first cell of the AutoFilter range
-        "bottom_right": "M241", # str — last cell of the AutoFilter range
+        "top_left": "A1",  # str — first cell of the AutoFilter range
+        "bottom_right": "M241",  # str — last cell of the AutoFilter range
     },
     "columns": [
         {
-            "column_index": 12,         # int — 0-based column index within the range
-            "filters": [],              # list[str] — simple string-match values (BrtFilter)
-            "custom_filters": {         # present when comparison criteria are used
-                "logic": "and",         # "and" | "or" — how multiple criteria combine
+            "column_index": 12,  # int — 0-based column index within the range
+            "filters": [],  # list[str] — simple string-match values (BrtFilter)
+            "custom_filters": {  # present when comparison criteria are used
+                "logic": "and",  # "and" | "or" — how multiple criteria combine
                 "criteria": [
                     {
                         "operator": ">",  # "<" | "<=" | "=" | ">=" | ">" | "<>"
-                        "value": 1.0,     # float | bool | str | None
+                        "value": 1.0,  # float | bool | str | None
                     },
                 ],
             },
@@ -402,17 +432,17 @@ The dict describes the AutoFilter range and the criteria applied to each filtere
 
 # XlsxWorkbook filter dict schema
 {
-    "sheet": "Sheet1",          # str — sheet name
-    "ref": "A1:M241",           # str — autoFilter range reference
+    "sheet": "Sheet1",  # str — sheet name
+    "ref": "A1:M241",  # str — autoFilter range reference
     "columns": [
         {
-            "col_id": 12,               # int — 0-based column index within the range
-            "type": "custom",           # "custom" | "discrete" | "top10" | "dynamic"
+            "col_id": 12,  # int — 0-based column index within the range
+            "type": "custom",  # "custom" | "discrete" | "top10" | "dynamic"
             # For type="custom":
             "conditions": [
                 {
                     "operator": "greaterThan",  # OOXML operator name
-                    "val": "1.0",               # str — the comparison value
+                    "val": "1.0",  # str — the comparison value
                 },
             ],
             # For type="discrete":
@@ -431,8 +461,8 @@ PivotTable value filters are exposed via `iter_pivot_tables()` in the `"sx_filte
     # ... other pivot fields ...
     "sx_filters": [
         {
-            "field_index": 2,     # int — 0-based index of the filtered pivot field
-            "filter_type": 20,    # int — PivotFilterType value (e.g. 20 = valueGreaterThan)
+            "field_index": 2,  # int — 0-based index of the filtered pivot field
+            "filter_type": 20,  # int — PivotFilterType value (e.g. 20 = valueGreaterThan)
             "criteria": [
                 {
                     "operator": ">",
@@ -454,7 +484,9 @@ with XlsbWorkbook("workbook.xlsb") as wb:
             cf = col.get("custom_filters")
             if cf:
                 for c in cf["criteria"]:
-                    print(f"  col {col['column_index']}: {c['operator']} {c['value']!r}")
+                    print(
+                        f"  col {col['column_index']}: {c['operator']} {c['value']!r}"
+                    )
             for val in col.get("filters", []):
                 print(f"  col {col['column_index']}: = {val!r}")
 
@@ -524,13 +556,13 @@ with XlsbWorkbook("workbook.xlsb") as wb:
 ```python
 from xlsb_reader import col_to_letter
 
-col_to_letter(0)   # 'A'
+col_to_letter(0)  # 'A'
 col_to_letter(25)  # 'Z'
 col_to_letter(26)  # 'AA'
 
-row, col = 2, 3    # 0-based → D3
+row, col = 2, 3  # 0-based → D3
 cell = f"{col_to_letter(col)}{row + 1}"
-print(cell)        # 'D3'
+print(cell)  # 'D3'
 ```
 
 ### Select workbook class by file extension
@@ -539,11 +571,13 @@ print(cell)        # 'D3'
 import pathlib
 from xlsb_reader import XlsbWorkbook, XlsxWorkbook
 
+
 def open_workbook(path: str):
     suffix = pathlib.Path(path).suffix.lower()
     if suffix in (".xlsx", ".xlsm"):
         return XlsxWorkbook(path)
     return XlsbWorkbook(path)
+
 
 with open_workbook("data.xlsx") as wb:
     print(wb.sheet_names)
