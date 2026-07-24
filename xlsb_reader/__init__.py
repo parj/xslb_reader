@@ -27,7 +27,7 @@ Call :func:`get_backend` to find out which backend is actually active.
 import os
 from typing import Iterable, Optional
 
-__version__ = "1.0.0rc1"
+__version__ = "2.0.0"
 
 _ENV_VAR = "XLSB_READER_BACKEND"
 
