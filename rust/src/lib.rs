@@ -112,8 +112,7 @@ fn to_json(path: String, include: Option<Vec<String>>, sheet: Option<String>) ->
     // default) and keys already sorted since `Map`/`Value::Object` is a
     // `BTreeMap` under the hood (the `preserve_order` feature is not
     // enabled — see Cargo.toml).
-    serde_json::to_string_pretty(&value)
-        .map_err(|e| common::XlsbError::Parse(e.to_string()).into())
+    serde_json::to_string_pretty(&value).map_err(|e| common::XlsbError::Parse(e.to_string()).into())
 }
 
 /// One-shot: same sections as [`to_dict`], rendered as a Markdown report.
@@ -128,7 +127,12 @@ fn to_markdown(
     let data = parse_any(&path)?;
     let include = include.unwrap_or_else(default_include);
     let supports_vba = is_xlsx_like(std::path::Path::new(&path));
-    Ok(render::to_markdown_string(&data, &include, sheet.as_deref(), supports_vba))
+    Ok(render::to_markdown_string(
+        &data,
+        &include,
+        sheet.as_deref(),
+        supports_vba,
+    ))
 }
 
 /// One-shot: extract a token-efficient structural spec from the workbook

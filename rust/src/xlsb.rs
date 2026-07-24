@@ -44,7 +44,9 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
 use serde_json::{Map, Value};
 
-use crate::common::{self, CellValue, FilterInfo, PivotTable, Reader, Result, WorkbookData, XlsbError};
+use crate::common::{
+    self, CellValue, FilterInfo, PivotTable, Reader, Result, WorkbookData, XlsbError,
+};
 
 // ---------------------------------------------------------------------------
 // Record type IDs (subset) — mirrors the constants block in `_reader.py`.
@@ -414,7 +416,11 @@ pub(crate) fn python_float_repr(d: f64) -> String {
     } else if (decpt as usize) >= digits.len() {
         format!("{}{}.0", digits, "0".repeat(decpt as usize - digits.len()))
     } else {
-        format!("{}.{}", &digits[0..decpt as usize], &digits[decpt as usize..])
+        format!(
+            "{}.{}",
+            &digits[0..decpt as usize],
+            &digits[decpt as usize..]
+        )
     };
     if neg {
         format!("-{body}")
@@ -572,7 +578,11 @@ fn resolve_loc(
     if apply_relative_offsets && col_rel {
         if let Some(base_col) = base_col {
             let col_i = col_masked as i64;
-            let off = if col_i < 0x2000 { col_i } else { col_i - 0x4000 };
+            let off = if col_i < 0x2000 {
+                col_i
+            } else {
+                col_i - 0x4000
+            };
             col = ((base_col as i64 + off).rem_euclid(0x4000)) as u32;
         }
     }
@@ -1037,7 +1047,8 @@ fn read_defined_names(data: &[u8]) -> BTreeMap<u32, String> {
             Ok(b) if b.len() == 4 => b,
             _ => continue,
         };
-        let cch = u32::from_le_bytes([cch_bytes[0], cch_bytes[1], cch_bytes[2], cch_bytes[3]]) as usize;
+        let cch =
+            u32::from_le_bytes([cch_bytes[0], cch_bytes[1], cch_bytes[2], cch_bytes[3]]) as usize;
         let want = cch.saturating_mul(2);
         if r.remaining() < want {
             continue;
@@ -1217,8 +1228,7 @@ fn parse_worksheet(
                 pending_exp.push((current_row, col));
                 formulas.insert((current_row, col), "={shared_formula}".to_string());
             } else {
-                let formula =
-                    decompile_formula(rgce, sheet_names, dn, current_row, col, rgcb);
+                let formula = decompile_formula(rgce, sheet_names, dn, current_row, col, rgcb);
                 formulas.insert((current_row, col), formula);
             }
             last_formula_cell = Some((current_row, col));
@@ -1263,9 +1273,12 @@ fn parse_worksheet(
 
     // Resolve shared-formula references (PtgExp) after full pass.
     for (row, col) in pending_exp {
-        let matched = shared_formulas.iter().find(|(rw_first, rw_last, col_first, col_last, _, _)| {
-            *rw_first <= row && row <= *rw_last && *col_first <= col && col <= *col_last
-        });
+        let matched =
+            shared_formulas
+                .iter()
+                .find(|(rw_first, rw_last, col_first, col_last, _, _)| {
+                    *rw_first <= row && row <= *rw_last && *col_first <= col && col <= *col_last
+                });
         if let Some((_, _, _, _, s_rgce, s_rgcb)) = matched {
             let formula = decompile_formula(s_rgce, sheet_names, dn, row, col, s_rgcb);
             formulas.insert((row, col), formula);
@@ -1292,7 +1305,8 @@ fn parse_worksheet_values(data: &[u8], sst: &[String]) -> BTreeMap<(u32, u32), C
 
         if rec_type == BRT_CELL_ISST && payload.len() >= 12 {
             let col = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
-            let isst = u32::from_le_bytes([payload[8], payload[9], payload[10], payload[11]]) as usize;
+            let isst =
+                u32::from_le_bytes([payload[8], payload[9], payload[10], payload[11]]) as usize;
             let s = sst.get(isst).cloned().unwrap_or_default();
             values.insert((current_row, col), CellValue::Str(s));
         } else if rec_type == BRT_CELL_ST && payload.len() >= 8 {
@@ -1424,11 +1438,19 @@ fn parse_worksheet_filters(data: &[u8]) -> Option<FilterInfo> {
             let mut range = Map::new();
             range.insert(
                 "top_left".to_string(),
-                Value::String(format!("{}{}", common::col_to_letter(col_first), rw_first + 1)),
+                Value::String(format!(
+                    "{}{}",
+                    common::col_to_letter(col_first),
+                    rw_first + 1
+                )),
             );
             range.insert(
                 "bottom_right".to_string(),
-                Value::String(format!("{}{}", common::col_to_letter(col_last), rw_last + 1)),
+                Value::String(format!(
+                    "{}{}",
+                    common::col_to_letter(col_last),
+                    rw_last + 1
+                )),
             );
             let mut obj = Map::new();
             obj.insert("range".to_string(), Value::Object(range));
@@ -1563,11 +1585,19 @@ fn parse_pivot_table_part(data: &[u8]) -> Map<String, Value> {
             let mut rfx_geom = Map::new();
             rfx_geom.insert(
                 "top_left".to_string(),
-                Value::String(format!("{}{}", common::col_to_letter(col_first), rw_first + 1)),
+                Value::String(format!(
+                    "{}{}",
+                    common::col_to_letter(col_first),
+                    rw_first + 1
+                )),
             );
             rfx_geom.insert(
                 "bottom_right".to_string(),
-                Value::String(format!("{}{}", common::col_to_letter(col_last), rw_last + 1)),
+                Value::String(format!(
+                    "{}{}",
+                    common::col_to_letter(col_last),
+                    rw_last + 1
+                )),
             );
             let mut location = Map::new();
             location.insert("rfx_geom".to_string(), Value::Object(rfx_geom));
@@ -1707,7 +1737,10 @@ fn read_part(zf: &mut ZipArchive, path: &str) -> Result<Vec<u8>> {
         return Ok(buf);
     }
     let lo = norm.to_lowercase();
-    let found = zf.file_names().find(|n| n.to_lowercase() == lo).map(|s| s.to_string());
+    let found = zf
+        .file_names()
+        .find(|n| n.to_lowercase() == lo)
+        .map(|s| s.to_string());
     match found {
         Some(n) => {
             let mut f = zf.by_name(&n)?;
@@ -1777,12 +1810,10 @@ fn parse_pivot_tables(
             meta.insert("sheet".to_string(), Value::String(sheet_name.clone()));
             meta.insert("part".to_string(), Value::String(resolved.clone()));
 
-            let p_rel_path = format!(
-                "{}/_rels/{}.rels",
-                dirname(&resolved),
-                basename(&resolved)
-            );
-            let p_rels = read_part(zf, &p_rel_path).map(|b| read_rels(&b)).unwrap_or_default();
+            let p_rel_path = format!("{}/_rels/{}.rels", dirname(&resolved), basename(&resolved));
+            let p_rels = read_part(zf, &p_rel_path)
+                .map(|b| read_rels(&b))
+                .unwrap_or_default();
             let mut cache_def: Option<String> = None;
             for (_id, t) in &p_rels {
                 let rr = resolve_rel_target(&resolved, t);
@@ -1792,7 +1823,10 @@ fn parse_pivot_tables(
                 }
             }
             if let Some(cd) = cache_def {
-                meta.insert("pivot_cache_definition".to_string(), Value::String(cd.clone()));
+                meta.insert(
+                    "pivot_cache_definition".to_string(),
+                    Value::String(cd.clone()),
+                );
                 if !cache_fields_by_part.contains_key(&cd) {
                     let fields = match read_part(zf, &cd) {
                         Ok(cdata) => parse_pivot_cache_fields(&cdata),
@@ -2018,7 +2052,12 @@ mod tests {
     fn decompile_string_literal() {
         let mut rgce = vec![PTG_STR];
         rgce.extend_from_slice(&2u16.to_le_bytes()); // cch=2
-        rgce.extend_from_slice("hi".encode_utf16().flat_map(|u| u.to_le_bytes()).collect::<Vec<u8>>().as_slice());
+        rgce.extend_from_slice(
+            "hi".encode_utf16()
+                .flat_map(|u| u.to_le_bytes())
+                .collect::<Vec<u8>>()
+                .as_slice(),
+        );
         assert_eq!(dc(&rgce), "\"hi\"");
     }
 
@@ -2026,7 +2065,16 @@ mod tests {
     fn decompile_func_sum_fixed_arity() {
         // PtgInt(1) PtgInt(2) PtgFuncVar(cparams=2, iftab=SUM=0x0004)
         let rgce = [
-            PTG_INT, 0x01, 0x00, PTG_INT, 0x02, 0x00, 0x20 | B_FUNC_VAR, 0x02, 0x04, 0x00,
+            PTG_INT,
+            0x01,
+            0x00,
+            PTG_INT,
+            0x02,
+            0x00,
+            0x20 | B_FUNC_VAR,
+            0x02,
+            0x04,
+            0x00,
         ];
         assert_eq!(dc(&rgce), "SUM(1,2)");
     }

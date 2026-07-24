@@ -403,10 +403,7 @@ fn parse_worksheet_formulas(data: &[u8]) -> BTreeMap<(u32, u32), String> {
             match f_type {
                 "array" => {
                     let formula_text = strip_udf(f_text);
-                    formulas.insert(
-                        (row as u32, col as u32),
-                        format!("{{={formula_text}}}"),
-                    );
+                    formulas.insert((row as u32, col as u32), format!("{{={formula_text}}}"));
                 }
                 "shared" => {
                     if !f_ref.is_empty() {
@@ -520,7 +517,10 @@ fn parse_pivot_table_xml(data: &[u8]) -> Map<String, Value> {
         None => return meta,
     };
 
-    meta.insert("name".to_string(), Value::String(root.attr_or("name", "").to_string()));
+    meta.insert(
+        "name".to_string(),
+        Value::String(root.attr_or("name", "").to_string()),
+    );
     let cache_id: i64 = root.attr_or("cacheId", "0").parse().unwrap_or(0);
     meta.insert("cache_id".to_string(), Value::from(cache_id));
     meta.insert(
@@ -554,7 +554,10 @@ fn parse_pivot_table_xml(data: &[u8]) -> Map<String, Value> {
         location.insert("rfx_geom".to_string(), Value::Object(rfx_geom));
         location.insert("rw_first_head".to_string(), Value::from(rw_first_head));
         location.insert("rw_first_data".to_string(), Value::from(rw_first_data));
-        location.insert("col_first_data".to_string(), Value::String(col_first_data_letter));
+        location.insert(
+            "col_first_data".to_string(),
+            Value::String(col_first_data_letter),
+        );
         location.insert("page_rows".to_string(), Value::from(0));
         location.insert("page_cols".to_string(), Value::from(0));
         meta.insert("location".to_string(), Value::Object(location));
@@ -878,8 +881,10 @@ pub fn parse_xlsx(path: &Path) -> Result<WorkbookData> {
         formulas.push((sheet_name.clone(), parse_worksheet_formulas(&ws_data)));
         values.push((sheet_name.clone(), parse_worksheet_values(&ws_data, &sst)));
 
-        let filter_info = parse_xml_tree(&ws_data)
-            .and_then(|root| root.find("autoFilter").map(|af| parse_auto_filter(af, sheet_name)));
+        let filter_info = parse_xml_tree(&ws_data).and_then(|root| {
+            root.find("autoFilter")
+                .map(|af| parse_auto_filter(af, sheet_name))
+        });
         filters.push((sheet_name.clone(), filter_info));
     }
 
@@ -928,7 +933,11 @@ fn parse_pivot_tables(
             Some(n) => n.clone(),
             None => continue,
         };
-        let rel_path = format!("{}/_rels/{}.rels", dirname(sheet_path), basename(sheet_path));
+        let rel_path = format!(
+            "{}/_rels/{}.rels",
+            dirname(sheet_path),
+            basename(sheet_path)
+        );
         let rels = match read_part(zf, &rel_path) {
             Ok(b) => parse_rels(&b),
             Err(_) => continue,
@@ -951,11 +960,7 @@ fn parse_pivot_tables(
             meta.insert("sheet".to_string(), Value::String(sheet_name.clone()));
             meta.insert("part".to_string(), Value::String(resolved.clone()));
 
-            let pt_rel_path = format!(
-                "{}/_rels/{}.rels",
-                dirname(&resolved),
-                basename(&resolved)
-            );
+            let pt_rel_path = format!("{}/_rels/{}.rels", dirname(&resolved), basename(&resolved));
             let pt_rels = read_part(zf, &pt_rel_path)
                 .map(|b| parse_rels(&b))
                 .unwrap_or_default();
@@ -1126,7 +1131,8 @@ mod tests {
 
     #[test]
     fn shared_strings_rich_text_runs_concatenate() {
-        let xml = br#"<sst><si><r><t>Hello </t></r><r><t>World</t></r></si><si><t>Plain</t></si></sst>"#;
+        let xml =
+            br#"<sst><si><r><t>Hello </t></r><r><t>World</t></r></si><si><t>Plain</t></si></sst>"#;
         assert_eq!(parse_shared_strings(xml), vec!["Hello World", "Plain"]);
     }
 
@@ -1184,6 +1190,9 @@ mod tests {
         assert_eq!(result["sheet"], "Sheet1");
         assert_eq!(result["ref"], "A1:B10");
         assert_eq!(result["columns"][0]["type"], "custom");
-        assert_eq!(result["columns"][0]["conditions"][0]["operator"], "greaterThan");
+        assert_eq!(
+            result["columns"][0]["conditions"][0]["operator"],
+            "greaterThan"
+        );
     }
 }

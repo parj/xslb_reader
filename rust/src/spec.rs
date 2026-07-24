@@ -103,7 +103,10 @@ fn toon_table(name: &str, columns: &[String], rows: &[Vec<String>]) -> String {
     for row in rows {
         lines.push(format!(
             "  {}",
-            row.iter().map(|v| csv_field(v)).collect::<Vec<_>>().join(",")
+            row.iter()
+                .map(|v| csv_field(v))
+                .collect::<Vec<_>>()
+                .join(",")
         ));
     }
     lines.join("\n")
@@ -248,7 +251,11 @@ fn detect_headers(values: &common::CellMap<CellValue>, ncols: u32) -> (HashMap<u
     let has_header = (0..ncols).any(|c| !is_null_ish(values.get(&(0, c))));
     let mut header_names = HashMap::new();
     for c in 0..ncols {
-        let v = if has_header { values.get(&(0, c)) } else { None };
+        let v = if has_header {
+            values.get(&(0, c))
+        } else {
+            None
+        };
         let name = match v {
             Some(cv) if !is_null_ish(Some(cv)) => py_str(cv),
             _ => format!("col_{}", common::col_to_letter(c)),
@@ -325,8 +332,13 @@ fn build_column_schema(
         }
 
         let mut notes: Vec<String> = Vec::new();
-        let distinct: HashSet<DistinctKey> = non_null_vals.iter().map(|v| distinct_key(v)).collect();
-        if c == 0 && null_count == 0 && !non_null_vals.is_empty() && distinct.len() == non_null_vals.len() {
+        let distinct: HashSet<DistinctKey> =
+            non_null_vals.iter().map(|v| distinct_key(v)).collect();
+        if c == 0
+            && null_count == 0
+            && !non_null_vals.is_empty()
+            && distinct.len() == non_null_vals.len()
+        {
             notes.push("primary key candidate".to_string());
         } else if col_type == "string"
             && !distinct.is_empty()
@@ -353,7 +365,12 @@ fn build_column_schema(
 }
 
 /// Port of `render_sheet_schema`.
-fn render_sheet_schema(sheet_name: &str, nrows: u32, ncols: u32, columns: &[ColumnSchema]) -> String {
+fn render_sheet_schema(
+    sheet_name: &str,
+    nrows: u32,
+    ncols: u32,
+    columns: &[ColumnSchema],
+) -> String {
     let mut lines = vec![
         format!("sheet: {sheet_name}"),
         format!("dimensions: {nrows} rows x {ncols} cols"),
@@ -464,7 +481,8 @@ fn match_col_row(bytes: &[u8], pos: usize) -> Option<(usize, String, String)> {
             return None;
         }
     }
-    let col = String::from_utf8_lossy(&bytes[letters_start..letters_start + letters_len]).into_owned();
+    let col =
+        String::from_utf8_lossy(&bytes[letters_start..letters_start + letters_len]).into_owned();
     let row = String::from_utf8_lossy(&bytes[digits_start..digits_start + digits_len]).into_owned();
     Some((i, col, row))
 }
@@ -512,7 +530,9 @@ fn find_cell_refs(s: &str) -> Vec<CellRefMatch> {
             }
         } else if bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' {
             let mut j = i + 1;
-            while j < n && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_' || bytes[j] == b'.') {
+            while j < n
+                && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_' || bytes[j] == b'.')
+            {
                 j += 1;
             }
             if j < n && bytes[j] == b'!' {
@@ -528,7 +548,10 @@ fn find_cell_refs(s: &str) -> Vec<CellRefMatch> {
         // engine giving up on the optional group when it doesn't lead to
         // overall success.
         let matched = prefix_end
-            .and_then(|pe| match_col_row(bytes, pe).map(|(end, col, row)| (end, qsheet.clone(), sheet.clone(), col, row)))
+            .and_then(|pe| {
+                match_col_row(bytes, pe)
+                    .map(|(end, col, row)| (end, qsheet.clone(), sheet.clone(), col, row))
+            })
             .or_else(|| match_col_row(bytes, i).map(|(end, col, row)| (end, None, None, col, row)));
 
         match matched {
@@ -565,7 +588,10 @@ fn normalize_formula(
         let sheet_ref = m.qsheet.clone().or_else(|| m.sheet.clone());
         let col_idx = letters_to_col(&m.col);
         let lookup_sheet = sheet_ref.clone().unwrap_or_else(|| cur_sheet.to_string());
-        let name = header_maps.get(&lookup_sheet).and_then(|hm| hm.get(&col_idx)).cloned();
+        let name = header_maps
+            .get(&lookup_sheet)
+            .and_then(|hm| hm.get(&col_idx))
+            .cloned();
         let token = match name {
             Some(n) => n,
             None => common::col_to_letter(col_idx.max(0) as u32),
@@ -640,7 +666,10 @@ fn extract_formulas(
         let mut col_index: HashMap<u32, usize> = HashMap::new();
         let mut deps: BTreeSet<String> = BTreeSet::new();
 
-        let get_or_create = |col: u32, col_stats: &mut Vec<ColFormulaStats>, col_index: &mut HashMap<u32, usize>| -> usize {
+        let get_or_create = |col: u32,
+                             col_stats: &mut Vec<ColFormulaStats>,
+                             col_index: &mut HashMap<u32, usize>|
+         -> usize {
             *col_index.entry(col).or_insert_with(|| {
                 col_stats.push(ColFormulaStats {
                     col,
@@ -681,10 +710,16 @@ fn extract_formulas(
             let (dominant_pattern, dominant_count) = most_common_first(&stats.patterns);
             let dominant_pattern = dominant_pattern.to_string();
             let mut entry = Map::new();
-            entry.insert("pattern".to_string(), Value::String(dominant_pattern.clone()));
+            entry.insert(
+                "pattern".to_string(),
+                Value::String(dominant_pattern.clone()),
+            );
             let (ex_cell, ex_formula) = &stats.examples[&dominant_pattern];
             entry.insert("example_cell".to_string(), Value::String(ex_cell.clone()));
-            entry.insert("example_formula".to_string(), Value::String(ex_formula.clone()));
+            entry.insert(
+                "example_formula".to_string(),
+                Value::String(ex_formula.clone()),
+            );
             entry.insert("row_count".to_string(), Value::from(dominant_count));
             let other_count: u32 = stats
                 .patterns
@@ -696,16 +731,25 @@ fn extract_formulas(
                 entry.insert("other_pattern_count".to_string(), Value::from(other_count));
             }
             if stats.parse_errors > 0 {
-                entry.insert("parse_error_count".to_string(), Value::from(stats.parse_errors));
+                entry.insert(
+                    "parse_error_count".to_string(),
+                    Value::from(stats.parse_errors),
+                );
             }
-            sheet_json.push((format!("col_{}", common::col_to_letter(stats.col)), Value::Object(entry)));
+            sheet_json.push((
+                format!("col_{}", common::col_to_letter(stats.col)),
+                Value::Object(entry),
+            ));
         }
         for stats in &col_stats {
             if stats.patterns.is_empty() && stats.parse_errors > 0 {
                 let mut entry = Map::new();
                 entry.insert("parse_error".to_string(), Value::Bool(true));
                 entry.insert("count".to_string(), Value::from(stats.parse_errors));
-                sheet_json.push((format!("col_{}", common::col_to_letter(stats.col)), Value::Object(entry)));
+                sheet_json.push((
+                    format!("col_{}", common::col_to_letter(stats.col)),
+                    Value::Object(entry),
+                ));
             }
         }
 
@@ -731,23 +775,36 @@ fn normalize_pivots(data: &WorkbookData, sheet_selected: &impl Fn(&str) -> bool)
             }
         }
 
-        let location_str: Option<String> = pt.get("location").filter(|l| l.is_object()).and_then(|loc| {
-            let geom = loc.get("rfx_geom");
-            let tl = geom.and_then(|g| g.get("top_left")).and_then(Value::as_str);
-            let br = geom.and_then(|g| g.get("bottom_right")).and_then(Value::as_str);
-            match (tl, br) {
-                (Some(tl), Some(br)) if !tl.is_empty() && !br.is_empty() => Some(format!("{tl}:{br}")),
-                _ => None,
-            }
-        });
+        let location_str: Option<String> =
+            pt.get("location")
+                .filter(|l| l.is_object())
+                .and_then(|loc| {
+                    let geom = loc.get("rfx_geom");
+                    let tl = geom.and_then(|g| g.get("top_left")).and_then(Value::as_str);
+                    let br = geom
+                        .and_then(|g| g.get("bottom_right"))
+                        .and_then(Value::as_str);
+                    match (tl, br) {
+                        (Some(tl), Some(br)) if !tl.is_empty() && !br.is_empty() => {
+                            Some(format!("{tl}:{br}"))
+                        }
+                        _ => None,
+                    }
+                });
 
         let empty_vec: Vec<Value> = Vec::new();
-        let cache_fields: &Vec<Value> = pt.get("cache_fields").and_then(Value::as_array).unwrap_or(&empty_vec);
+        let cache_fields: &Vec<Value> = pt
+            .get("cache_fields")
+            .and_then(Value::as_array)
+            .unwrap_or(&empty_vec);
 
         let field_name = |idx: Option<i64>| -> Option<String> {
             let idx = idx?;
             let field = cache_fields.get(usize::try_from(idx).ok()?)?;
-            field.get("name").and_then(Value::as_str).map(str::to_string)
+            field
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::to_string)
         };
         let field_value = |idx: Option<i64>, item_idx: Option<i64>| -> Option<Value> {
             let idx = idx?;
@@ -764,11 +821,23 @@ fn normalize_pivots(data: &WorkbookData, sheet_selected: &impl Fn(&str) -> bool)
                     let fidx = sf.get("field_index").and_then(Value::as_i64);
                     for crit in criteria {
                         let mut e = Map::new();
-                        e.insert("kind".to_string(), Value::String("value_filter".to_string()));
+                        e.insert(
+                            "kind".to_string(),
+                            Value::String("value_filter".to_string()),
+                        );
                         e.insert("field_index".to_string(), opt_i64_to_value(fidx));
-                        e.insert("field_name".to_string(), opt_string_to_value(field_name(fidx)));
-                        e.insert("operator".to_string(), crit.get("operator").cloned().unwrap_or(Value::Null));
-                        e.insert("value".to_string(), crit.get("value").cloned().unwrap_or(Value::Null));
+                        e.insert(
+                            "field_name".to_string(),
+                            opt_string_to_value(field_name(fidx)),
+                        );
+                        e.insert(
+                            "operator".to_string(),
+                            crit.get("operator").cloned().unwrap_or(Value::Null),
+                        );
+                        e.insert(
+                            "value".to_string(),
+                            crit.get("value").cloned().unwrap_or(Value::Null),
+                        );
                         filters.push(Value::Object(e));
                     }
                 }
@@ -784,11 +853,20 @@ fn normalize_pivots(data: &WorkbookData, sheet_selected: &impl Fn(&str) -> bool)
                     .cloned()
                     .unwrap_or(Value::Null);
                 let mut e = Map::new();
-                e.insert("kind".to_string(), Value::String("value_filter".to_string()));
+                e.insert(
+                    "kind".to_string(),
+                    Value::String("value_filter".to_string()),
+                );
                 e.insert("field_index".to_string(), opt_i64_to_value(fidx));
-                e.insert("field_name".to_string(), opt_string_to_value(field_name(fidx)));
+                e.insert(
+                    "field_name".to_string(),
+                    opt_string_to_value(field_name(fidx)),
+                );
                 e.insert("operator".to_string(), operator);
-                e.insert("value".to_string(), rf.get("value").cloned().unwrap_or(Value::Null));
+                e.insert(
+                    "value".to_string(),
+                    rf.get("value").cloned().unwrap_or(Value::Null),
+                );
                 filters.push(Value::Object(e));
             }
         }
@@ -806,15 +884,24 @@ fn normalize_pivots(data: &WorkbookData, sheet_selected: &impl Fn(&str) -> bool)
                 let mut e = Map::new();
                 e.insert("kind".to_string(), Value::String("item_filter".to_string()));
                 e.insert("field_index".to_string(), opt_i64_to_value(fidx));
-                e.insert("field_name".to_string(), opt_string_to_value(field_name(fidx)));
+                e.insert(
+                    "field_name".to_string(),
+                    opt_string_to_value(field_name(fidx)),
+                );
                 e.insert("excluded_values".to_string(), Value::Array(excluded));
                 filters.push(Value::Object(e));
             }
         }
 
         let mut entry = Map::new();
-        entry.insert("name".to_string(), pt.get("name").cloned().unwrap_or(Value::Null));
-        entry.insert("sheet".to_string(), pt.get("sheet").cloned().unwrap_or(Value::Null));
+        entry.insert(
+            "name".to_string(),
+            pt.get("name").cloned().unwrap_or(Value::Null),
+        );
+        entry.insert(
+            "sheet".to_string(),
+            pt.get("sheet").cloned().unwrap_or(Value::Null),
+        );
         entry.insert(
             "source_cache_id".to_string(),
             pt.get("cache_id").cloned().unwrap_or(Value::Null),
@@ -860,17 +947,34 @@ fn normalize_filters(
 
         let (rng, top_left): (Option<String>, String) =
             if let Some(range_obj) = info.get("range").filter(|v| v.is_object()) {
-                let tl = range_obj.get("top_left").and_then(Value::as_str).unwrap_or("");
-                let br = range_obj.get("bottom_right").and_then(Value::as_str).unwrap_or("");
+                let tl = range_obj
+                    .get("top_left")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let br = range_obj
+                    .get("bottom_right")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
                 (Some(format!("{tl}:{br}")), tl.to_string())
-            } else if let Some(r) = info.get("ref").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+            } else if let Some(r) = info
+                .get("ref")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+            {
                 let tl = r.split(':').next().unwrap_or("").to_string();
                 (Some(r.to_string()), tl)
             } else {
                 (None, String::new())
             };
-        let letters: String = top_left.chars().take_while(|c| c.is_ascii_uppercase()).collect();
-        let range_start_col: i64 = if letters.is_empty() { 0 } else { letters_to_col(&letters) };
+        let letters: String = top_left
+            .chars()
+            .take_while(|c| c.is_ascii_uppercase())
+            .collect();
+        let range_start_col: i64 = if letters.is_empty() {
+            0
+        } else {
+            letters_to_col(&letters)
+        };
 
         let empty_map = HashMap::new();
         let sheet_headers = header_maps.get(sheet_name).unwrap_or(&empty_map);
@@ -891,20 +995,31 @@ fn normalize_filters(
                 };
                 let ctype = col.get("type").and_then(Value::as_str);
                 let ctype_or = |default: &str| -> Value {
-                    ctype.map(|s| Value::String(s.to_string())).unwrap_or_else(|| Value::String(default.to_string()))
+                    ctype
+                        .map(|s| Value::String(s.to_string()))
+                        .unwrap_or_else(|| Value::String(default.to_string()))
                 };
 
                 if let Some(custom) = col.get("custom_filters").filter(|v| truthy(v)) {
                     let empty_arr = Vec::new();
-                    let crits = custom.get("criteria").and_then(Value::as_array).unwrap_or(&empty_arr);
+                    let crits = custom
+                        .get("criteria")
+                        .and_then(Value::as_array)
+                        .unwrap_or(&empty_arr);
                     let logic = custom.get("logic");
                     for crit in crits {
                         let mut e = Map::new();
                         e.insert("index".to_string(), opt_i64_to_value(idx));
                         e.insert("name".to_string(), name.clone());
                         e.insert("type".to_string(), Value::String("custom".to_string()));
-                        e.insert("operator".to_string(), crit.get("operator").cloned().unwrap_or(Value::Null));
-                        e.insert("value".to_string(), crit.get("value").cloned().unwrap_or(Value::Null));
+                        e.insert(
+                            "operator".to_string(),
+                            crit.get("operator").cloned().unwrap_or(Value::Null),
+                        );
+                        e.insert(
+                            "value".to_string(),
+                            crit.get("value").cloned().unwrap_or(Value::Null),
+                        );
                         if let Some(l) = logic {
                             if truthy(l) && crits.len() > 1 {
                                 e.insert("logic".to_string(), l.clone());
@@ -912,16 +1027,24 @@ fn normalize_filters(
                         }
                         columns_out.push(Value::Object(e));
                     }
-                } else if let Some(conditions) =
-                    col.get("conditions").and_then(Value::as_array).filter(|a| !a.is_empty())
+                } else if let Some(conditions) = col
+                    .get("conditions")
+                    .and_then(Value::as_array)
+                    .filter(|a| !a.is_empty())
                 {
                     for crit in conditions {
                         let mut e = Map::new();
                         e.insert("index".to_string(), opt_i64_to_value(idx));
                         e.insert("name".to_string(), name.clone());
                         e.insert("type".to_string(), ctype_or("custom"));
-                        e.insert("operator".to_string(), crit.get("operator").cloned().unwrap_or(Value::Null));
-                        e.insert("value".to_string(), crit.get("val").cloned().unwrap_or(Value::Null));
+                        e.insert(
+                            "operator".to_string(),
+                            crit.get("operator").cloned().unwrap_or(Value::Null),
+                        );
+                        e.insert(
+                            "value".to_string(),
+                            crit.get("val").cloned().unwrap_or(Value::Null),
+                        );
                         columns_out.push(Value::Object(e));
                     }
                 } else if let Some(filters_arr) = col.get("filters").filter(|v| truthy(v)) {
@@ -957,7 +1080,10 @@ fn normalize_filters(
 
         let mut result = Map::new();
         result.insert("sheet".to_string(), Value::String(sheet_name.clone()));
-        result.insert("range".to_string(), rng.map(Value::String).unwrap_or(Value::Null));
+        result.insert(
+            "range".to_string(),
+            rng.map(Value::String).unwrap_or(Value::Null),
+        );
         result.insert("columns".to_string(), Value::Array(columns_out));
         out.push(Value::Object(result));
     }
@@ -1013,12 +1139,17 @@ fn render_hints(
                 .and_then(|hm| hm.get(&col_idx))
                 .cloned()
                 .unwrap_or_else(|| colkey.clone());
-            let approach = if ["VLOOKUP", "INDEX", "MATCH"].iter().any(|f| pattern.contains(f)) {
+            let approach = if ["VLOOKUP", "INDEX", "MATCH"]
+                .iter()
+                .any(|f| pattern.contains(f))
+            {
                 "use pd.merge or dict map"
             } else {
                 "vectorisable"
             };
-            lines.push(format!("- Key transformation: {sheet}.{colname} = {pattern} ({approach})"));
+            lines.push(format!(
+                "- Key transformation: {sheet}.{colname} = {pattern} ({approach})"
+            ));
         }
     }
 
@@ -1028,7 +1159,11 @@ fn render_hints(
 
     for pt in pivots {
         let mut f_desc = String::new();
-        if let Some(pfilters) = pt.get("filters").and_then(Value::as_array).filter(|a| !a.is_empty()) {
+        if let Some(pfilters) = pt
+            .get("filters")
+            .and_then(Value::as_array)
+            .filter(|a| !a.is_empty())
+        {
             let mut parts = Vec::new();
             for f in pfilters {
                 let label = f
@@ -1036,9 +1171,17 @@ fn render_hints(
                     .and_then(Value::as_str)
                     .filter(|s| !s.is_empty())
                     .map(str::to_string)
-                    .unwrap_or_else(|| format!("field {}", json_str(f.get("field_index").unwrap_or(&Value::Null))));
+                    .unwrap_or_else(|| {
+                        format!(
+                            "field {}",
+                            json_str(f.get("field_index").unwrap_or(&Value::Null))
+                        )
+                    });
                 if f.get("kind").and_then(Value::as_str) == Some("item_filter") {
-                    let excluded = f.get("excluded_values").cloned().unwrap_or(Value::Array(vec![]));
+                    let excluded = f
+                        .get("excluded_values")
+                        .cloned()
+                        .unwrap_or(Value::Array(vec![]));
                     parts.push(format!("{label} excludes {}", python_repr(&excluded)));
                 } else {
                     let operator = f.get("operator").map(json_str).unwrap_or_default();
@@ -1072,7 +1215,9 @@ fn render_hints(
                     .and_then(Value::as_str)
                     .filter(|s| !s.is_empty())
                     .map(str::to_string)
-                    .unwrap_or_else(|| format!("col {}", json_str(col.get("index").unwrap_or(&Value::Null))));
+                    .unwrap_or_else(|| {
+                        format!("col {}", json_str(col.get("index").unwrap_or(&Value::Null)))
+                    });
                 let sheet = f.get("sheet").map(json_str).unwrap_or_default();
                 let operator = col.get("operator").map(json_str).unwrap_or_default();
                 lines.push(format!(
@@ -1193,8 +1338,10 @@ pub fn extract_spec(
     for (sheet_name, values) in &data.values {
         let (nrows, ncols) = sheet_dimensions(values);
         let (header_names, data_start_row) = detect_headers(values, ncols);
-        let header_names_i64: HashMap<i64, String> =
-            header_names.iter().map(|(&k, v)| (k as i64, v.clone())).collect();
+        let header_names_i64: HashMap<i64, String> = header_names
+            .iter()
+            .map(|(&k, v)| (k as i64, v.clone()))
+            .collect();
         header_maps.insert(sheet_name.clone(), header_names_i64);
         sheet_dims.push((sheet_name.clone(), (nrows, ncols)));
 
@@ -1202,7 +1349,14 @@ pub fn extract_spec(
             continue;
         }
 
-        let columns = build_column_schema(values, ncols, &header_names, data_start_row, nrows, scan_rows);
+        let columns = build_column_schema(
+            values,
+            ncols,
+            &header_names,
+            data_start_row,
+            nrows,
+            scan_rows,
+        );
         schema_sections.push(render_sheet_schema(sheet_name, nrows, ncols, &columns));
         if sample_rows > 0 {
             sample_sections.push(render_sheet_sample(
@@ -1236,7 +1390,12 @@ pub fn extract_spec(
     let dependencies_value: Value = Value::Object(
         dependencies
             .iter()
-            .map(|(k, v)| (k.clone(), Value::Array(v.iter().cloned().map(Value::String).collect())))
+            .map(|(k, v)| {
+                (
+                    k.clone(),
+                    Value::Array(v.iter().cloned().map(Value::String).collect()),
+                )
+            })
             .collect(),
     );
     sections.push(fenced_json("dependencies", &dependencies_value));
@@ -1267,12 +1426,18 @@ mod tests {
     use super::*;
 
     fn refs(s: &str) -> Vec<(String, String)> {
-        find_cell_refs(s).iter().map(|m| (m.col.clone(), m.row.clone())).collect()
+        find_cell_refs(s)
+            .iter()
+            .map(|m| (m.col.clone(), m.row.clone()))
+            .collect()
     }
 
     #[test]
     fn cell_ref_scanner_basic() {
-        assert_eq!(refs("A1+B2"), vec![("A".into(), "1".into()), ("B".into(), "2".into())]);
+        assert_eq!(
+            refs("A1+B2"),
+            vec![("A".into(), "1".into()), ("B".into(), "2".into())]
+        );
     }
 
     #[test]
@@ -1383,23 +1548,36 @@ mod tests {
     fn distinct_key_collapses_python_numeric_tower() {
         // 1 (int), 1.0 (float), and True (bool) are all == in Python and
         // would collapse into one element in a `set()`.
-        let keys: HashSet<DistinctKey> = [CellValue::Int(1), CellValue::Float(1.0), CellValue::Bool(true)]
-            .iter()
-            .map(distinct_key)
-            .collect();
+        let keys: HashSet<DistinctKey> = [
+            CellValue::Int(1),
+            CellValue::Float(1.0),
+            CellValue::Bool(true),
+        ]
+        .iter()
+        .map(distinct_key)
+        .collect();
         assert_eq!(keys.len(), 1);
     }
 
     #[test]
     fn infer_column_type_precedence() {
-        assert_eq!(infer_column_type(&[&CellValue::Int(1), &CellValue::Int(2)]), "integer");
-        assert_eq!(infer_column_type(&[&CellValue::Int(1), &CellValue::Float(2.5)]), "float");
+        assert_eq!(
+            infer_column_type(&[&CellValue::Int(1), &CellValue::Int(2)]),
+            "integer"
+        );
+        assert_eq!(
+            infer_column_type(&[&CellValue::Int(1), &CellValue::Float(2.5)]),
+            "float"
+        );
         assert_eq!(
             infer_column_type(&[&CellValue::Str("2024-01-01".to_string())]),
             "date"
         );
         assert_eq!(infer_column_type(&[&CellValue::Bool(true)]), "boolean");
-        assert_eq!(infer_column_type(&[&CellValue::Str("hello".to_string())]), "string");
+        assert_eq!(
+            infer_column_type(&[&CellValue::Str("hello".to_string())]),
+            "string"
+        );
         assert_eq!(infer_column_type(&[]), "string");
     }
 

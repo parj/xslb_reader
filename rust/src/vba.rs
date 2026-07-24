@@ -468,7 +468,9 @@ fn parse_dir(data: &[u8]) -> Result<Vec<ModuleMeta>> {
 
 fn ru16(data: &[u8], pos: &mut usize) -> Result<u16> {
     if *pos + 2 > data.len() {
-        return Err(XlsbError::Parse("dir stream: truncated u16 read".to_string()));
+        return Err(XlsbError::Parse(
+            "dir stream: truncated u16 read".to_string(),
+        ));
     }
     let v = u16::from_le_bytes([data[*pos], data[*pos + 1]]);
     *pos += 2;
@@ -477,7 +479,9 @@ fn ru16(data: &[u8], pos: &mut usize) -> Result<u16> {
 
 fn ru32(data: &[u8], pos: &mut usize) -> Result<u32> {
     if *pos + 4 > data.len() {
-        return Err(XlsbError::Parse("dir stream: truncated u32 read".to_string()));
+        return Err(XlsbError::Parse(
+            "dir stream: truncated u32 read".to_string(),
+        ));
     }
     let v = u32::from_le_bytes([data[*pos], data[*pos + 1], data[*pos + 2], data[*pos + 3]]);
     *pos += 4;

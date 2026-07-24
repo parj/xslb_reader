@@ -473,10 +473,7 @@ pub fn json_value_to_py(py: Python<'_>, value: &serde_json::Value) -> PyResult<P
 /// as the `sorted(formulas.items())` the CLI/render layer applies before
 /// display (though callers should not rely on dict ordering for
 /// correctness — only content — same as today).
-pub fn cell_formula_map_to_py(
-    py: Python<'_>,
-    map: &CellMap<String>,
-) -> PyResult<Py<PyDict>> {
+pub fn cell_formula_map_to_py(py: Python<'_>, map: &CellMap<String>) -> PyResult<Py<PyDict>> {
     let dict = PyDict::new(py);
     for (&(row, col), formula) in map.iter() {
         let key = PyTuple::new(py, [row, col])?;
@@ -486,10 +483,7 @@ pub fn cell_formula_map_to_py(
 }
 
 /// Same as [`cell_formula_map_to_py`] but for cached/constant cell values.
-pub fn cell_value_map_to_py(
-    py: Python<'_>,
-    map: &CellMap<CellValue>,
-) -> PyResult<Py<PyDict>> {
+pub fn cell_value_map_to_py(py: Python<'_>, map: &CellMap<CellValue>) -> PyResult<Py<PyDict>> {
     let dict = PyDict::new(py);
     for (&(row, col), value) in map.iter() {
         let key = PyTuple::new(py, [row, col])?;
@@ -507,7 +501,13 @@ pub fn formulas_to_py(
     let list = PyList::empty(py);
     for (sheet, map) in formulas {
         let dict = cell_formula_map_to_py(py, map)?;
-        let tuple = PyTuple::new(py, [sheet.into_pyobject(py)?.into_any(), dict.into_bound(py).into_any()])?;
+        let tuple = PyTuple::new(
+            py,
+            [
+                sheet.into_pyobject(py)?.into_any(),
+                dict.into_bound(py).into_any(),
+            ],
+        )?;
         list.append(tuple)?;
     }
     Ok(list.into())
@@ -522,7 +522,13 @@ pub fn values_to_py(
     let list = PyList::empty(py);
     for (sheet, map) in values {
         let dict = cell_value_map_to_py(py, map)?;
-        let tuple = PyTuple::new(py, [sheet.into_pyobject(py)?.into_any(), dict.into_bound(py).into_any()])?;
+        let tuple = PyTuple::new(
+            py,
+            [
+                sheet.into_pyobject(py)?.into_any(),
+                dict.into_bound(py).into_any(),
+            ],
+        )?;
         list.append(tuple)?;
     }
     Ok(list.into())
@@ -546,7 +552,10 @@ pub fn filters_to_py(
             Some(v) => json_value_to_py(py, v)?,
             None => py.None(),
         };
-        let tuple = PyTuple::new(py, [sheet.into_pyobject(py)?.into_any(), info_obj.into_bound(py)])?;
+        let tuple = PyTuple::new(
+            py,
+            [sheet.into_pyobject(py)?.into_any(), info_obj.into_bound(py)],
+        )?;
         list.append(tuple)?;
     }
     Ok(list.into())

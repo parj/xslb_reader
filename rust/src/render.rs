@@ -49,9 +49,9 @@ impl From<common::CellValue> for Value {
     fn from(v: common::CellValue) -> Value {
         match v {
             common::CellValue::Int(i) => Value::from(i),
-            common::CellValue::Float(f) => {
-                serde_json::Number::from_f64(f).map(Value::Number).unwrap_or(Value::Null)
-            }
+            common::CellValue::Float(f) => serde_json::Number::from_f64(f)
+                .map(Value::Number)
+                .unwrap_or(Value::Null),
             common::CellValue::Str(s) => Value::String(s),
             common::CellValue::Bool(b) => Value::Bool(b),
         }
@@ -183,7 +183,12 @@ struct Gathered {
 /// `to_dict()`'s output, even with `include=["vba"]`), while `XlsxWorkbook`
 /// does. The one-shot functions in `lib.rs` determine this from the file
 /// extension the same way `_spec_extractor.open_workbook` picks a reader.
-fn gather(data: &WorkbookData, include: &[String], sheet: Option<&str>, supports_vba: bool) -> Gathered {
+fn gather(
+    data: &WorkbookData,
+    include: &[String],
+    sheet: Option<&str>,
+    supports_vba: bool,
+) -> Gathered {
     let includes = normalize_include(include);
 
     let mut out = Gathered {
@@ -421,10 +426,8 @@ fn as_markdown(
                                                 .get("operator")
                                                 .and_then(Value::as_str)
                                                 .unwrap_or("");
-                                            let val = c
-                                                .get("val")
-                                                .map(json_display)
-                                                .unwrap_or_default();
+                                            let val =
+                                                c.get("val").map(json_display).unwrap_or_default();
                                             format!("{op} {val}")
                                         })
                                         .collect::<Vec<_>>()
@@ -432,10 +435,7 @@ fn as_markdown(
                                     // Python: `str(col.get("attrs", ""))` —
                                     // the default is an empty string, not
                                     // `None`.
-                                    _ => col
-                                        .get("attrs")
-                                        .map(python_dict_repr)
-                                        .unwrap_or_default(),
+                                    _ => col.get("attrs").map(python_dict_repr).unwrap_or_default(),
                                 };
                                 lines.push(format!(
                                     "- `{reference}` — column {col_id}: {col_type} {cond_str}"
@@ -518,8 +518,12 @@ pub fn to_markdown_string(
         &data.sheet_names,
         formulas.as_deref(),
         values.as_deref(),
-        includes.contains("pivots").then_some(gathered.pivots.as_slice()),
-        includes.contains("filters").then_some(gathered.filters.as_slice()),
+        includes
+            .contains("pivots")
+            .then_some(gathered.pivots.as_slice()),
+        includes
+            .contains("filters")
+            .then_some(gathered.filters.as_slice()),
     );
 
     if includes.contains("vba") && supports_vba && !data.vba.is_empty() {
