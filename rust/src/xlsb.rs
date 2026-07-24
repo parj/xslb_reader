@@ -1231,6 +1231,13 @@ fn parse_worksheet(
                     (Ok(a), Ok(b), Ok(c), Ok(d)) => (a, b, c, d),
                     _ => continue,
                 };
+            if rec_type == BRT_ARR_FMLA {
+                // BrtArrFmla has a 1-byte fAlwaysCalc/unused flags field between
+                // rfx and formula that BrtShrFmla does not have.
+                if r.skip(1).is_err() {
+                    continue;
+                }
+            }
             let (rgce, rgcb) = match read_cell_parsed_formula(&mut r) {
                 Some(v) => v,
                 None => continue,

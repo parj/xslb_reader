@@ -1419,6 +1419,10 @@ def _parse_worksheet(
                 )
             except struct.error:
                 continue
+            if rec_type == BRT_ARR_FMLA:
+                # BrtArrFmla has a 1-byte fAlwaysCalc/unused flags field between
+                # rfx and formula that BrtShrFmla does not have.
+                buf.read(1)
             parsed = _read_cell_parsed_formula(buf)
             if parsed is None:
                 continue
