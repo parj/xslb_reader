@@ -11,11 +11,13 @@ permissions:
   id-token: write
 
 jobs:
-  # Detects the `bump: ...` keyword, computes the next version, bumps it in
-  # BOTH the pure-Python package (pyproject.toml / __init__.py) and the Rust
-  # companion crate (rust/pyproject.toml / rust/Cargo.toml) so the two dists
-  # stay in lockstep, commits+tags, and creates the GitHub release. Building
-  # and publishing wheels is delegated to the jobs below so we can fan out
+  # Releases on every successful CI run on main. Defaults to a minor bump;
+  # an explicit `bump: (patch|minor|major|rc)` keyword in the commit message
+  # overrides the default. Bumps the version in BOTH the pure-Python package
+  # (pyproject.toml / __init__.py) and the Rust companion crate
+  # (rust/pyproject.toml / rust/Cargo.toml) so the two dists stay in
+  # lockstep, commits+tags, and creates the GitHub release. Building and
+  # publishing wheels is delegated to the jobs below so we can fan out
   # across platforms.
   release:
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
@@ -37,15 +39,11 @@ jobs:
           MSG="${{ github.event.workflow_run.head_commit.message }}"
           if echo "$MSG" | grep -qE '^bump: (patch|minor|major|rc)'; then
             BUMP_TYPE=$(echo "$MSG" | grep -oE 'bump: (patch|minor|major|rc)' | awk '{print $2}')
-            echo "type=$BUMP_TYPE" >> "$GITHUB_OUTPUT"
-            echo "triggered=true" >> "$GITHUB_OUTPUT"
           else
-            echo "triggered=false" >> "$GITHUB_OUTPUT"
+            BUMP_TYPE="minor"
           fi
-
-      - name: Exit if no bump keyword
-        if: steps.bump.outputs.triggered != 'true'
-        run: echo "No bump keyword found — skipping release." && exit 0
+          echo "type=$BUMP_TYPE" >> "$GITHUB_OUTPUT"
+          echo "triggered=true" >> "$GITHUB_OUTPUT"
 
       - uses: astral-sh/setup-uv@v5
         if: steps.bump.outputs.triggered == 'true'
