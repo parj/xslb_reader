@@ -51,10 +51,16 @@ def main():
     )
     args = parser.parse_args()
 
+    # Use the backend-dispatched workbook classes (xlsb_reader_rs when
+    # available, pure Python otherwise) rather than importing the concrete
+    # Python implementations directly -- _render's to_dict/to_json/to_markdown
+    # work against either backend's object unchanged.
+    import xlsb_reader
+
     if args.path.lower().endswith((".xlsx", ".xlsm")):
-        from xlsb_reader._xlsx_reader import XlsxWorkbook as WorkbookClass
+        WorkbookClass = xlsb_reader.XlsxWorkbook
     else:
-        from xlsb_reader._reader import XlsbWorkbook as WorkbookClass
+        WorkbookClass = xlsb_reader.XlsbWorkbook
 
     with WorkbookClass(args.path) as wb:
         includes = [s.strip() for s in args.include.split(",") if s.strip()]
