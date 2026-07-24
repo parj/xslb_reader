@@ -12,6 +12,7 @@
 //! `_ns()` helper) once per part, then every parser below walks it with
 //! `.find()`/`.find_all()` helpers analogous to `ElementTree.find()`.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -99,6 +100,46 @@ fn local_name(qname: &[u8]) -> String {
     }
 }
 
+/// XML 1.0 §2.11 line-ending normalization: literal `\r\n` and lone `\r`
+/// both become `\n`. `quick-xml` does not do this, but Python's `expat` does,
+/// so without it Rust leaks raw `\r` into cell strings that the pure-Python
+/// backend never emits (Excel writes multi-line cells with literal CRLF).
+///
+/// This must run on the *raw* text, before unescaping — the spec normalizes
+/// line endings ahead of entity expansion, which is exactly what makes a
+/// `&#13;` character reference survive as a real `\r` while a literal CR
+/// does not.
+fn normalize_line_endings(s: &str) -> Cow<'_, str> {
+    if !s.contains('\r') {
+        return Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\r' {
+            // Swallow the `\n` of a `\r\n` pair so it collapses to one `\n`.
+            if chars.peek() == Some(&'\n') {
+                chars.next();
+            }
+            out.push('\n');
+        } else {
+            out.push(ch);
+        }
+    }
+    Cow::Owned(out)
+}
+
+/// XML 1.0 §3.3.3 attribute-value normalization: line endings are normalized
+/// first (above), then every remaining literal `\n`/`\t` becomes a space. A
+/// literal CRLF therefore collapses to a *single* space, matching `expat`.
+fn normalize_attr_value(s: &str) -> Cow<'_, str> {
+    let normalized = normalize_line_endings(s);
+    if !normalized.contains(['\n', '\t']) {
+        return normalized;
+    }
+    Cow::Owned(normalized.replace(['\n', '\t'], " "))
+}
+
 /// Parse XML bytes into a small generic tree, or `None` on malformed XML —
 /// mirrors `except ET.ParseError: return {}/[]` at every Python call site.
 fn parse_xml_tree(data: &[u8]) -> Option<XmlNode> {
@@ -112,7 +153,8 @@ fn parse_xml_tree(data: &[u8]) -> Option<XmlNode> {
             .flatten()
             .map(|a| {
                 let key = local_name(a.key.as_ref());
-                let val = String::from_utf8_lossy(&a.value).into_owned();
+                let raw = String::from_utf8_lossy(&a.value);
+                let val = normalize_attr_value(&raw).into_owned();
                 let val = quick_xml::escape::unescape(&val)
                     .map(|c| c.into_owned())
                     .unwrap_or(val);
@@ -151,6 +193,7 @@ fn parse_xml_tree(data: &[u8]) -> Option<XmlNode> {
             Ok(Event::Text(t)) => {
                 if let Some(top) = stack.last_mut() {
                     if let Ok(decoded) = t.decode() {
+                        let decoded = normalize_line_endings(&decoded);
                         match quick_xml::escape::unescape(&decoded) {
                             Ok(txt) => top.text.push_str(&txt),
                             Err(_) => top.text.push_str(&decoded),
@@ -160,7 +203,9 @@ fn parse_xml_tree(data: &[u8]) -> Option<XmlNode> {
             }
             Ok(Event::CData(t)) => {
                 if let Some(top) = stack.last_mut() {
-                    top.text.push_str(&String::from_utf8_lossy(&t.into_inner()));
+                    let inner = t.into_inner();
+                    let raw = String::from_utf8_lossy(&inner);
+                    top.text.push_str(&normalize_line_endings(&raw));
                 }
             }
             // quick-xml emits `&entity;`/`&#N;` references embedded in text
@@ -1127,6 +1172,39 @@ mod tests {
         let xml = b"<t>a&#65;b&#x42;c</t>";
         let tree = parse_xml_tree(xml).expect("valid xml");
         assert_eq!(tree.text, "aAbBc");
+    }
+
+    #[test]
+    fn xml_tree_normalizes_literal_line_endings_in_text() {
+        // Regression test: Excel writes multi-line cells with literal CRLF.
+        // quick-xml passes those through verbatim, so the Rust backend used
+        // to emit `\r` where the pure-Python backend (expat, which applies
+        // XML 1.0 §2.11) emits `\n`.
+        let xml = b"<t>A\r\nB\rC</t>";
+        let tree = parse_xml_tree(xml).expect("valid xml");
+        assert_eq!(tree.text, "A\nB\nC");
+    }
+
+    #[test]
+    fn xml_tree_preserves_cr_character_reference() {
+        // §2.11 normalization happens *before* entity expansion, so a `&#13;`
+        // character reference survives as a real `\r` even though a literal
+        // CR would not. This is how a genuine CR round-trips through OOXML.
+        let xml = b"<t>a&#13;b</t>";
+        let tree = parse_xml_tree(xml).expect("valid xml");
+        assert_eq!(tree.text, "a\rb");
+    }
+
+    #[test]
+    fn xml_tree_normalizes_attribute_whitespace() {
+        // §3.3.3: line endings normalized first, then literal `\n`/`\t`
+        // become spaces — so a literal CRLF collapses to a *single* space,
+        // while `&#13;` again survives. Matches expat exactly.
+        let xml = b"<c a=\"x\r\ny\" b=\"p\tq\" c=\"m&#13;n\"/>";
+        let tree = parse_xml_tree(xml).expect("valid xml");
+        assert_eq!(tree.attr_or("a", ""), "x y");
+        assert_eq!(tree.attr_or("b", ""), "p q");
+        assert_eq!(tree.attr_or("c", ""), "m\rn");
     }
 
     #[test]
