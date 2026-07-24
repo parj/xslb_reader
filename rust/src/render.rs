@@ -474,7 +474,7 @@ fn python_dict_repr(v: &Value) -> String {
     }
 }
 
-fn python_repr(v: &Value) -> String {
+pub(crate) fn python_repr(v: &Value) -> String {
     match v {
         Value::String(s) => format!("'{s}'"),
         Value::Null => "None".to_string(),
