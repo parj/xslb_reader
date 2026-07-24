@@ -827,7 +827,8 @@ impl<'a> Decompiler<'a> {
     fn step_class_variant(&mut self, base: u8, stack: &mut Vec<String>) -> Result<bool> {
         match base {
             B_ARRAY => {
-                self.skip_lenient(7)?; // 7 placeholder bytes
+                // unused1(4) + unused2(2) + unused3(4) + unused4(4) = 14 bytes.
+                self.skip_lenient(14)?;
                 stack.push("{array}".to_string());
             }
             B_FUNC => {
