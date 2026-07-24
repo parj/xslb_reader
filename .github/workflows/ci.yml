@@ -35,5 +35,58 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.11"
+      # `uv sync --group dev` intentionally does NOT pull in the `fast` extra
+      # (xlsb_reader_rs), so this job never touches cargo/maturin and stays
+      # green on the pure-Python backend alone.
       - run: uv sync --group dev
       - run: uv run pytest tests/ -v
+
+  rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "rust -> target"
+
+      - name: cargo fmt --check
+        run: cargo fmt --manifest-path rust/Cargo.toml --check
+
+      - name: cargo clippy
+        run: cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --manifest-path rust/Cargo.toml
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+
+      # Pure-Python deps (pytest etc.) — same env the rust extension gets
+      # installed into below.
+      - run: uv sync --group dev
+
+      - name: Install maturin into the project venv
+        run: uv pip install maturin
+
+      - name: Build and install the xlsb_reader_rs extension (maturin develop)
+        run: uv run maturin develop --manifest-path rust/Cargo.toml --release
+
+      - name: Run test suite against the Rust backend
+        env:
+          XLSB_READER_BACKEND: rust
+        run: uv run pytest tests/ -v
+      # Note: this matrix builds/tests native (host-arch) wheels only, on
+      # linux/macos/windows x86_64 (and macos-latest's native arm64). A
+      # cross-compiled linux aarch64 smoke build is deliberately left out
+      # here to keep CI fast/simple — cross-arch (aarch64, musllinux, etc.)
+      # coverage is handled by the release workflow's wheel matrix instead.

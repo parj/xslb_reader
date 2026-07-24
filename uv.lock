@@ -551,8 +551,13 @@ wheels = [
 
 [[package]]
 name = "xlsb-reader"
-version = "1.0.0"
+version = "1.0.0rc1"
 source = { editable = "." }
+
+[package.optional-dependencies]
+fast = [
+    { name = "xlsb-reader-rs" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -562,6 +567,8 @@ dev = [
 ]
 
 [package.metadata]
+requires-dist = [{ name = "xlsb-reader-rs", marker = "extra == 'fast'", editable = "rust" }]
+provides-extras = ["fast"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -569,3 +576,8 @@ dev = [
     { name = "pytest" },
     { name = "ruff" },
 ]
+
+[[package]]
+name = "xlsb-reader-rs"
+version = "1.0.0rc1"
+source = { editable = "rust" }

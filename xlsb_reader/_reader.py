@@ -1032,7 +1032,8 @@ class _Decompiler:
                 base = ptg & 0x1F
 
                 if base == _B_ARRAY:
-                    self._buf.read(7)  # 7 placeholder bytes
+                    # unused1(4) + unused2(2) + unused3(4) + unused4(4) = 14 bytes.
+                    self._buf.read(14)
                     stack.append("{array}")
 
                 elif base == _B_FUNC:
@@ -1419,6 +1420,10 @@ def _parse_worksheet(
                 )
             except struct.error:
                 continue
+            if rec_type == BRT_ARR_FMLA:
+                # BrtArrFmla has a 1-byte fAlwaysCalc/unused flags field between
+                # rfx and formula that BrtShrFmla does not have.
+                buf.read(1)
             parsed = _read_cell_parsed_formula(buf)
             if parsed is None:
                 continue

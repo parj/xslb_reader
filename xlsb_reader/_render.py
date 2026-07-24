@@ -1,0 +1,305 @@
+# xlsb_reader/_render.py
+"""
+Pure-Python rendering layer shared by the CLI and the package-level
+convenience functions (``xlsb_reader.to_dict`` / ``to_json`` / ``to_markdown``).
+
+This module owns the assembly of a workbook's formulas/values/pivots/filters
+(and, for xlsx/xlsm, VBA modules) into the three public output shapes:
+
+  - :func:`to_dict`     -> a plain ``dict`` (the same shape printed by
+                            ``xlsb_reader --format dict``, via ``pprint``)
+  - :func:`to_json`     -> ``json.dumps(to_dict(...), ...)`` with stable
+                            (sorted) key ordering
+  - :func:`to_markdown` -> a human-readable Markdown report
+
+It works against any workbook object exposing the ``XlsbWorkbook`` /
+``XlsxWorkbook`` API (``sheet_names``, ``iter_formulas``, ``iter_values``,
+``iter_pivot_tables``, and optionally ``iter_filters`` / ``iter_vba_modules``)
+regardless of whether that object came from the pure-Python backend or the
+Rust backend.
+"""
+
+import json
+import pprint
+from typing import Dict, Iterable, List, Optional, Tuple
+
+from xlsb_reader._reader import col_to_letter
+
+_ALL_SECTIONS = ("formulas", "values", "pivots", "filters", "vba")
+_DEFAULT_INCLUDE = ("formulas", "values", "pivots")
+
+
+def _cellmap(formulas: Dict[Tuple[int, int], str]) -> Dict[str, str]:
+    """Convert {(row,col): formula} to {'A1': formula} with stable ordering."""
+    out: Dict[str, str] = {}
+    for (row, col), formula in sorted(formulas.items()):
+        out[f"{col_to_letter(col)}{row + 1}"] = formula
+    return out
+
+
+def _cellmap_any(cells: Dict[Tuple[int, int], object]) -> Dict[str, object]:
+    out: Dict[str, object] = {}
+    for (row, col), value in sorted(cells.items()):
+        out[f"{col_to_letter(col)}{row + 1}"] = value
+    return out
+
+
+def _collect_formulas(
+    wb,
+    filter_sheet: Optional[str] = None,
+) -> Dict[str, Dict[str, str]]:
+    out: Dict[str, Dict[str, str]] = {}
+    for sheet_name, formulas in wb.iter_formulas():
+        if filter_sheet and sheet_name != filter_sheet:
+            continue
+        if formulas:
+            out[sheet_name] = _cellmap(formulas)
+    return out
+
+
+def _collect_values(
+    wb,
+    filter_sheet: Optional[str] = None,
+) -> Dict[str, Dict[str, object]]:
+    out: Dict[str, Dict[str, object]] = {}
+    for sheet_name, values in wb.iter_values():
+        if filter_sheet and sheet_name != filter_sheet:
+            continue
+        if values:
+            out[sheet_name] = _cellmap_any(values)
+    return out
+
+
+def _collect_pivots(
+    wb,
+    filter_sheet: Optional[str] = None,
+) -> List[Dict[str, object]]:
+    out: List[Dict[str, object]] = []
+    for pt in wb.iter_pivot_tables():
+        if filter_sheet and pt.get("sheet") != filter_sheet:
+            continue
+        out.append(pt)
+    return out
+
+
+def _collect_filters(wb, filter_sheet=None):
+    """
+    Collect filter dicts from ``wb.iter_filters()``.
+
+    ``XlsbWorkbook.iter_filters()`` yields ``(sheet_name, info_or_None)``
+    tuples for every sheet, while ``XlsxWorkbook.iter_filters()`` yields
+    bare info dicts (each already carrying its own ``"sheet"`` key) only
+    for sheets with an AutoFilter. Normalize both into bare dicts with a
+    ``"sheet"`` key so callers (here and in ``to_dict``'s ``"filters"``
+    section) see one consistent shape regardless of backend.
+    """
+    out = []
+    for item in wb.iter_filters():
+        if isinstance(item, tuple):
+            sheet_name, info = item
+            if info is None:
+                continue
+            f = {**info, "sheet": sheet_name}
+        else:
+            f = item
+        if filter_sheet and f.get("sheet") != filter_sheet:
+            continue
+        out.append(f)
+    return out
+
+
+def _as_markdown(
+    sheets: List[str],
+    formulas: Optional[Dict[str, Dict[str, str]]] = None,
+    values: Optional[Dict[str, Dict[str, object]]] = None,
+    pivots: Optional[List[Dict[str, object]]] = None,
+    filters: Optional[List[Dict[str, object]]] = None,
+) -> str:
+    lines: List[str] = [f"Sheets: {', '.join(sheets)}", ""]
+    emitted = False
+    if formulas:
+        emitted = True
+        lines.append("## Formulas")
+        lines.append("")
+        for sheet, cell_formulas in formulas.items():
+            lines.append(f"### {sheet}")
+            for cell, formula in cell_formulas.items():
+                lines.append(f"- `{cell}`: `{formula}`")
+            lines.append("")
+    if values:
+        emitted = True
+        lines.append("## Values")
+        lines.append("")
+        for sheet, cell_values in values.items():
+            lines.append(f"### {sheet}")
+            for cell, value in cell_values.items():
+                lines.append(f"- `{cell}`: `{value}`")
+            lines.append("")
+    if pivots:
+        emitted = True
+        lines.append("## Pivot Tables")
+        lines.append("")
+        for pt in pivots:
+            lines.append(
+                f"- `{pt.get('name') or '<unnamed>'}` "
+                f"(sheet: `{pt.get('sheet')}`, cache_id: `{pt.get('cache_id')}`)"
+            )
+            location = pt.get("location")
+            if isinstance(location, dict):
+                rfx = location.get("rfx_geom")
+                if isinstance(rfx, dict):
+                    top_left = rfx.get("top_left")
+                    bottom_right = rfx.get("bottom_right")
+                    if top_left and bottom_right:
+                        lines.append(
+                            f"  body: `{top_left}:{bottom_right}`; "
+                            f"fields: `{pt.get('pivot_fields')}`; "
+                            f"items: `{pt.get('pivot_items')}`"
+                        )
+    if filters:
+        emitted = True
+        lines.append("## Filters")
+        lines.append("")
+        by_sheet: Dict[str, List[Dict[str, object]]] = {}
+        for f in filters:
+            sheet = f.get("sheet") or "<unknown>"
+            by_sheet.setdefault(sheet, []).append(f)
+        for sheet, sheet_filters in by_sheet.items():
+            lines.append(f"### {sheet}")
+            for f in sheet_filters:
+                ref = f.get("ref", "")
+                columns = f.get("columns", [])
+                if columns:
+                    for col in columns:
+                        col_id = col.get("col_id", "?")
+                        col_type = col.get("type", "")
+                        conditions = col.get("conditions", [])
+                        cond_str = (
+                            "; ".join(
+                                f"{c.get('operator', '')} {c.get('val', '')}"
+                                for c in conditions
+                            )
+                            if conditions
+                            else str(col.get("attrs", ""))
+                        )
+                        lines.append(
+                            f"- `{ref}` — column {col_id}: {col_type} {cond_str}"
+                        )
+                else:
+                    lines.append(f"- `{ref}`")
+            lines.append("")
+    if not emitted:
+        lines.append("(no formulas found)")
+        return "\n".join(lines)
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _normalize_include(include: Iterable[str]) -> set:
+    return {s.strip().lower() for s in include if s and s.strip()}
+
+
+def _gather(
+    wb, include: Iterable[str], sheet: Optional[str] = None
+) -> Tuple[
+    Dict[str, object],
+    Dict[str, Dict[str, str]],
+    Dict[str, Dict[str, object]],
+    List[Dict[str, object]],
+    List[Dict[str, object]],
+    Dict[str, str],
+]:
+    """
+    Collect the requested sections from ``wb``.
+
+    Returns (data, formulas, values, pivots, filters, vba) where ``data`` is
+    the dict destined for ``to_dict``/``to_json`` and the remaining values are
+    the raw per-section collections (needed by ``to_markdown``, which renders
+    a slightly different view than the dict/json shape).
+    """
+    includes = _normalize_include(include)
+
+    formulas: Dict[str, Dict[str, str]] = {}
+    values: Dict[str, Dict[str, object]] = {}
+    pivots: List[Dict[str, object]] = []
+    filters: List[Dict[str, object]] = []
+    vba: Dict[str, str] = {}
+
+    data: Dict[str, object] = {}
+
+    if "formulas" in includes:
+        formulas = _collect_formulas(wb, filter_sheet=sheet)
+        data["formulas"] = formulas
+    if "values" in includes:
+        values = _collect_values(wb, filter_sheet=sheet)
+        data["values"] = values
+    if "pivots" in includes:
+        pivots = _collect_pivots(wb, filter_sheet=sheet)
+        data["pivot_tables"] = pivots
+    if "filters" in includes and hasattr(wb, "iter_filters"):
+        filters = _collect_filters(wb, filter_sheet=sheet)
+        data["filters"] = filters
+    if "vba" in includes and hasattr(wb, "iter_vba_modules"):
+        vba = wb.iter_vba_modules()
+        data["vba_modules"] = vba
+
+    return data, formulas, values, pivots, filters, vba
+
+
+def to_dict(
+    wb,
+    include: Iterable[str] = _DEFAULT_INCLUDE,
+    sheet: Optional[str] = None,
+) -> Dict[str, object]:
+    """
+    Assemble a plain dict of the requested sections from an open workbook.
+
+    ``include`` is an iterable of section names among
+    ``formulas``, ``values``, ``pivots``, ``filters``, ``vba``.
+    ``sheet``, if given, restricts formulas/values/pivots/filters to that
+    sheet name.
+    """
+    data, _formulas, _values, _pivots, _filters, _vba = _gather(wb, include, sheet)
+    return data
+
+
+def to_json(
+    wb,
+    include: Iterable[str] = _DEFAULT_INCLUDE,
+    sheet: Optional[str] = None,
+) -> str:
+    """Same as :func:`to_dict` but rendered as a JSON string."""
+    data = to_dict(wb, include=include, sheet=sheet)
+    return json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True)
+
+
+def to_markdown(
+    wb,
+    include: Iterable[str] = _DEFAULT_INCLUDE,
+    sheet: Optional[str] = None,
+) -> str:
+    """Same sections as :func:`to_dict`, rendered as a Markdown report."""
+    includes = _normalize_include(include)
+    _data, formulas, values, pivots, filters, vba = _gather(wb, include, sheet)
+
+    md = _as_markdown(
+        wb.sheet_names,
+        formulas=formulas if "formulas" in includes else None,
+        values=values if "values" in includes else None,
+        pivots=pivots if "pivots" in includes else None,
+        filters=filters if "filters" in includes else None,
+    )
+    if vba:
+        vba_lines = ["## VBA Modules", ""]
+        for mod_name, src in vba.items():
+            vba_lines.append(f"### {mod_name}")
+            vba_lines.append("```vba")
+            vba_lines.append(src.rstrip())
+            vba_lines.append("```")
+            vba_lines.append("")
+        md = md.rstrip() + "\n\n" + "\n".join(vba_lines)
+    return md
+
+
+def to_pretty_dict_str(data: Dict[str, object]) -> str:
+    """Render a dict the same way the CLI's ``--format dict`` output does."""
+    return pprint.pformat(data, sort_dicts=True)
