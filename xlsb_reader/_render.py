@@ -83,8 +83,25 @@ def _collect_pivots(
 
 
 def _collect_filters(wb, filter_sheet=None):
+    """
+    Collect filter dicts from ``wb.iter_filters()``.
+
+    ``XlsbWorkbook.iter_filters()`` yields ``(sheet_name, info_or_None)``
+    tuples for every sheet, while ``XlsxWorkbook.iter_filters()`` yields
+    bare info dicts (each already carrying its own ``"sheet"`` key) only
+    for sheets with an AutoFilter. Normalize both into bare dicts with a
+    ``"sheet"`` key so callers (here and in ``to_dict``'s ``"filters"``
+    section) see one consistent shape regardless of backend.
+    """
     out = []
-    for f in wb.iter_filters():
+    for item in wb.iter_filters():
+        if isinstance(item, tuple):
+            sheet_name, info = item
+            if info is None:
+                continue
+            f = {**info, "sheet": sheet_name}
+        else:
+            f = item
         if filter_sheet and f.get("sheet") != filter_sheet:
             continue
         out.append(f)

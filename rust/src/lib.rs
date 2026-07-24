@@ -93,7 +93,8 @@ fn to_dict(
 ) -> PyResult<Py<PyAny>> {
     let data = parse_any(&path)?;
     let include = include.unwrap_or_else(default_include);
-    render::to_dict_py(py, &data, &include, sheet.as_deref())
+    let supports_vba = is_xlsx_like(std::path::Path::new(&path));
+    render::to_dict_py(py, &data, &include, sheet.as_deref(), supports_vba)
 }
 
 /// One-shot: same sections as [`to_dict`], returned as a JSON string.
@@ -103,8 +104,16 @@ fn to_dict(
 fn to_json(path: String, include: Option<Vec<String>>, sheet: Option<String>) -> PyResult<String> {
     let data = parse_any(&path)?;
     let include = include.unwrap_or_else(default_include);
-    let value = render::to_dict_value(&data, &include, sheet.as_deref());
-    serde_json::to_string(&value).map_err(|e| common::XlsbError::Parse(e.to_string()).into())
+    let supports_vba = is_xlsx_like(std::path::Path::new(&path));
+    let value = render::to_dict_value(&data, &include, sheet.as_deref(), supports_vba);
+    // Match Python's `json.dumps(data, ensure_ascii=False, indent=2,
+    // sort_keys=True)`: 2-space pretty-printing (serde_json's default for
+    // `to_string_pretty`) with raw (non-escaped) UTF-8 (serde_json's
+    // default) and keys already sorted since `Map`/`Value::Object` is a
+    // `BTreeMap` under the hood (the `preserve_order` feature is not
+    // enabled — see Cargo.toml).
+    serde_json::to_string_pretty(&value)
+        .map_err(|e| common::XlsbError::Parse(e.to_string()).into())
 }
 
 /// One-shot: same sections as [`to_dict`], rendered as a Markdown report.
@@ -118,7 +127,8 @@ fn to_markdown(
 ) -> PyResult<String> {
     let data = parse_any(&path)?;
     let include = include.unwrap_or_else(default_include);
-    Ok(render::to_markdown_string(&data, &include, sheet.as_deref()))
+    let supports_vba = is_xlsx_like(std::path::Path::new(&path));
+    Ok(render::to_markdown_string(&data, &include, sheet.as_deref(), supports_vba))
 }
 
 /// One-shot: extract a token-efficient structural spec from the workbook

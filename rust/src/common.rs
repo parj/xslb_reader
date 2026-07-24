@@ -97,10 +97,17 @@ pub enum CellValue {
     Bool(bool),
 }
 
+/// A single sheet's `{(row, col): value}` map (0-based keys), for whichever
+/// per-cell payload `T` a parser produces. Named alias purely to keep
+/// `WorkbookData` and the conversion helpers below under clippy's
+/// `type_complexity` threshold — structurally identical to writing out
+/// `BTreeMap<(u32, u32), T>` everywhere.
+pub type CellMap<T> = BTreeMap<(u32, u32), T>;
+
 impl CellValue {
     /// Convert to the exact Python object `iter_values()` would yield for
     /// this cell (`int`/`float`/`str`/`bool`).
-    pub fn into_py(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+    pub fn to_py(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         Ok(match self {
             // NOTE: match Bool before Int is irrelevant here since CellValue
             // is an explicit enum (no accidental bool/int aliasing like in
@@ -163,11 +170,15 @@ pub type PivotTable = serde_json::Value;
 #[derive(Debug, Clone, Default)]
 pub struct WorkbookData {
     pub sheet_names: Vec<String>,
-    pub formulas: Vec<(String, BTreeMap<(u32, u32), String>)>,
-    pub values: Vec<(String, BTreeMap<(u32, u32), CellValue>)>,
+    pub formulas: Vec<(String, CellMap<String>)>,
+    pub values: Vec<(String, CellMap<CellValue>)>,
     pub filters: Vec<(String, Option<FilterInfo>)>,
     pub pivots: Vec<PivotTable>,
-    pub vba: BTreeMap<String, String>,
+    /// `(module_name, source)` pairs in the VBA project's own `dir`-stream
+    /// declaration order — a `Vec` rather than a `BTreeMap` specifically so
+    /// this order (which Python's `iter_vba_modules()` dict preserves) isn't
+    /// silently alphabetized. See `vba::read_vba_modules`.
+    pub vba: Vec<(String, String)>,
 }
 
 // ---------------------------------------------------------------------------
@@ -279,6 +290,11 @@ impl<'a> Reader<'a> {
     }
 
     /// Current read offset from the start of the buffer.
+    ///
+    /// Not currently called by any parser (each wrote its own equivalent
+    /// bookkeeping inline), but kept as part of this documented byte-cursor
+    /// contract alongside the other primitives.
+    #[allow(dead_code)]
     pub fn pos(&self) -> usize {
         self.pos
     }
@@ -354,6 +370,12 @@ impl<'a> Reader<'a> {
     /// `cch * 2` bytes. Matches the `XLWideString` pattern used for cell
     /// text/SST entries/etc. (`_read_xlwide_from` / inline reads in
     /// `_read_sst`, `_read_workbook`, `_read_defined_names`).
+    ///
+    /// Not currently called: `xlsb.rs`'s own `read_xlwide_from` inlines the
+    /// same read against its own `RecordReader`-scoped buffers instead of
+    /// going through this shared `Reader`. Kept as part of the documented
+    /// contract (see module doc comment) for API completeness.
+    #[allow(dead_code)]
     pub fn xlwstr32(&mut self) -> Result<String> {
         let cch = self.u32()? as usize;
         let bytes = self.take_bytes(cch * 2)?;
@@ -363,6 +385,12 @@ impl<'a> Reader<'a> {
     /// Read a BIFF12 varint: up to 4 bytes, 7 payload bits per byte
     /// (little-endian bit order), continuation signalled by the top bit.
     /// Matches `RecordReader._varint` exactly, including its 4-byte cap.
+    ///
+    /// Not currently called: `xlsb.rs`'s own `RecordReader` has an
+    /// equivalent private method operating on its own cursor state instead
+    /// of going through this shared `Reader`. Kept as part of the
+    /// documented contract for API completeness.
+    #[allow(dead_code)]
     pub fn varint(&mut self) -> Result<u32> {
         let mut result: u32 = 0;
         let mut shift: u32 = 0;
@@ -447,7 +475,7 @@ pub fn json_value_to_py(py: Python<'_>, value: &serde_json::Value) -> PyResult<P
 /// correctness — only content — same as today).
 pub fn cell_formula_map_to_py(
     py: Python<'_>,
-    map: &BTreeMap<(u32, u32), String>,
+    map: &CellMap<String>,
 ) -> PyResult<Py<PyDict>> {
     let dict = PyDict::new(py);
     for (&(row, col), formula) in map.iter() {
@@ -460,12 +488,12 @@ pub fn cell_formula_map_to_py(
 /// Same as [`cell_formula_map_to_py`] but for cached/constant cell values.
 pub fn cell_value_map_to_py(
     py: Python<'_>,
-    map: &BTreeMap<(u32, u32), CellValue>,
+    map: &CellMap<CellValue>,
 ) -> PyResult<Py<PyDict>> {
     let dict = PyDict::new(py);
     for (&(row, col), value) in map.iter() {
         let key = PyTuple::new(py, [row, col])?;
-        dict.set_item(key, value.into_py(py)?)?;
+        dict.set_item(key, value.to_py(py)?)?;
     }
     Ok(dict.into())
 }
@@ -474,7 +502,7 @@ pub fn cell_value_map_to_py(
 /// yield: `[(sheet_name, {(row, col): formula, ...}), ...]`.
 pub fn formulas_to_py(
     py: Python<'_>,
-    formulas: &[(String, BTreeMap<(u32, u32), String>)],
+    formulas: &[(String, CellMap<String>)],
 ) -> PyResult<Py<PyList>> {
     let list = PyList::empty(py);
     for (sheet, map) in formulas {
@@ -489,7 +517,7 @@ pub fn formulas_to_py(
 /// `[(sheet_name, {(row, col): value, ...}), ...]`.
 pub fn values_to_py(
     py: Python<'_>,
-    values: &[(String, BTreeMap<(u32, u32), CellValue>)],
+    values: &[(String, CellMap<CellValue>)],
 ) -> PyResult<Py<PyList>> {
     let list = PyList::empty(py);
     for (sheet, map) in values {
@@ -534,7 +562,7 @@ pub fn pivots_to_py(py: Python<'_>, pivots: &[PivotTable]) -> PyResult<Py<PyList
 }
 
 /// Build the dict `iter_vba_modules()` returns: `{module_name: source}`.
-pub fn vba_to_py(py: Python<'_>, vba: &BTreeMap<String, String>) -> PyResult<Py<PyDict>> {
+pub fn vba_to_py(py: Python<'_>, vba: &[(String, String)]) -> PyResult<Py<PyDict>> {
     let dict = PyDict::new(py);
     for (name, src) in vba {
         dict.set_item(name, src)?;

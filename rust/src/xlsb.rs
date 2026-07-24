@@ -391,7 +391,7 @@ fn fmt_num(d: f64) -> Result<String> {
 /// switching to scientific notation when the decimal point position
 /// (`decpt`) is `<= -4` or `> 16` (same rule as `format_float_short` in
 /// CPython's `pystrtod.c` for the `'r'` format code).
-fn python_float_repr(d: f64) -> String {
+pub(crate) fn python_float_repr(d: f64) -> String {
     let neg = d.is_sign_negative();
     let ad = d.abs();
     let sci = format!("{ad:e}");
@@ -1868,7 +1868,7 @@ pub fn parse_xlsb(path: &Path) -> Result<WorkbookData> {
         values,
         filters,
         pivots,
-        vba: BTreeMap::new(),
+        vba: Vec::new(),
     })
 }
 

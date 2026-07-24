@@ -57,17 +57,20 @@ use crate::common::{Result, XlsbError};
 /// container.
 ///
 /// Matches `read_vba_modules(cfb_data: bytes) -> Dict[str, str]` in
-/// `_vba_reader.py`: returns `{module_name: plain_text_source}`, and
-/// returns an **empty map** (not an error) when the input is not a valid
-/// VBA project — see the module-level doc comment above.
-pub fn read_vba_modules(data: &[u8]) -> Result<BTreeMap<String, String>> {
+/// `_vba_reader.py`: returns `[(module_name, plain_text_source), ...]` in
+/// the VBA project's own `dir`-stream declaration order (matching the
+/// iteration order of Python's `dict`, built by inserting modules in that
+/// same order), and returns an **empty list** (not an error) when the
+/// input is not a valid VBA project — see the module-level doc comment
+/// above.
+pub fn read_vba_modules(data: &[u8]) -> Result<Vec<(String, String)>> {
     Ok(try_read_vba_modules(data).unwrap_or_default())
 }
 
 /// Fallible core of [`read_vba_modules`]. Any `Err` returned here is
 /// equivalent to the pure-Python `read_vba_modules` raising an exception
 /// that its caller catches broadly and turns into `{}`.
-fn try_read_vba_modules(data: &[u8]) -> Result<BTreeMap<String, String>> {
+fn try_read_vba_modules(data: &[u8]) -> Result<Vec<(String, String)>> {
     let streams = cfb_read_streams(data)?;
 
     // Locate VBA/dir stream (case-insensitive), same rule as Python:
@@ -81,14 +84,14 @@ fn try_read_vba_modules(data: &[u8]) -> Result<BTreeMap<String, String>> {
     let dir_data = decompress(&streams[&dir_key])?;
     let modules_meta = parse_dir(&dir_data)?;
 
-    let mut result = BTreeMap::new();
+    let mut result = Vec::new();
     for module in modules_meta {
         if module.stream.is_empty() {
             continue;
         }
         if let Some(stream_data) = find_module_stream(&streams, &module.stream) {
             if let Ok(source) = extract_module_source(stream_data, module.offset) {
-                result.insert(module.name, source);
+                result.push((module.name, source));
             }
             // Modules that fail to decompress are silently skipped, same as
             // the `except Exception: pass` in `read_vba_modules`.
